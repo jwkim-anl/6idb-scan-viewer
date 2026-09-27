@@ -323,6 +323,12 @@ def read_geometry(
         frame_shape=(int(shape[1]), int(shape[2])),
         n_frames=int(shape[0]),
     )
+    # Sized for the stack from the outset: the dataclass default is a single
+    # column, and a file carrying no angles anywhere would otherwise index past
+    # the end of it on frame 1 rather than say what was missing.
+    geometry.sample_angles = np.zeros((4, geometry.n_frames))
+    geometry.detector_angles = np.zeros((2, geometry.n_frames))
+
     _read_image_geometry(image, geometry)
     has_frame_angles = geometry.sources.get("angles") == "image"
     if geometry.master_path is not None:
@@ -336,6 +342,10 @@ def read_geometry(
         except OSError:
             pass
     geometry.frame_epoch = frame_epoch
+    if "angles" not in geometry.sources:
+        # Nothing to convert against. Kept openable so the geometry can still
+        # be inspected and typed in, but the map itself means nothing.
+        geometry.sources["angles"] = "missing"
     return geometry
 
 
@@ -1263,6 +1273,13 @@ class HklWindow(QtWidgets.QMainWindow):
             )
             return
         (h0, h1), (k0, k1), (l0, l1) = cloud.bounds()
+        if self.geometry_data.sources.get("angles") == "missing":
+            self.status.showMessage(
+                "No diffractometer angles found in either file — every frame is "
+                "being treated as 0°, so this map is not meaningful. Check that "
+                "the master file is beside the image file."
+            )
+            return
         self.status.showMessage(
             f"{cloud.frames_used} frame(s) · drawing {drawn:,} of {in_range:,} in range "
             f"({len(cloud.points):,} converted from {cloud.total_pixels/1e6:.1f} M pixels) · "
