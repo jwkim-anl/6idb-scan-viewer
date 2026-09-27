@@ -243,8 +243,34 @@ the threshold dropped, and the brightest kept if a cap is still exceeded — and
 display thins further. On one test scan a threshold of 100 counts left 84,419 points
 of 26.9 M.
 
-## Data is not in this repository
+## Example data
 
-`.gitignore` keeps every `*.h5` / `*.hdf` out: the image stacks run to 110 MB each,
-over GitHub's hard 100 MB-per-file limit, and the working directory holds ~558 MB.
-Point the viewers at wherever the data actually lives.
+One scan is included so the viewers can be tried without beamline data:
+
+```
+tise2_2_00152_master.hdf     1.5 MB
+pva_tise2_2_00152.h5        20.0 MB
+```
+
+Scan 152 is a `rel_scan` rocking `psic_eta` from 20.692° to 22.692° over 101
+points, 101 frames of 516×516. Because the angles actually move, it gives the HKL
+map a real reciprocal-space volume — H 0.920…1.160, K −0.634…−0.353, L 7.337…7.705
+— rather than the single detector surface a stationary `count` would give. It also
+carries the full geometry in its baseline, so the HKL conversion works out of the
+box.
+
+From a clone:
+
+```bash
+conda env create -f environment.yml && conda activate bluesky-scan-viewer
+python scan_viewer.py .          # scan 152 appears in the listing, Img ✓
+```
+
+Tick a Y field to plot it, then **Load Image…** for the frames and **HKL 3D…** for
+the reciprocal-space map.
+
+## The rest of the data is not in this repository
+
+Apart from that pair, `.gitignore` keeps every `*.h5` / `*.hdf` out: the image
+stacks run to 110 MB each, over GitHub's hard 100 MB-per-file limit, and a working
+directory of them holds ~558 MB. Point the viewers at wherever the data lives.
