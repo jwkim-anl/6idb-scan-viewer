@@ -8,10 +8,16 @@ the pvapy streaming consumer:
 | **`scan_viewer.py`** | browse a directory of scans, plot the scalar channels, read the baseline |
 | **`image_viewer.py`** | the detector frames, with ROIs and ROI plots |
 | **`hkl_viewer.py`** | the frames mapped into reciprocal space, in 3D |
+| **`hkl_grid.py`** | bins that map onto a regular HKL grid and saves it as `.vti` |
+| **`vti_viewer.py`** | opens a saved `.vti` on its own, with no beamline data |
+| **`slice_plot.py`** | the slice plane as a flat image, with H/K/L axes |
 
 They chain together: the scan browser opens the image viewer for whatever scan you
 have selected, and the image viewer opens the HKL map for the file it is showing.
 Each also runs on its own from the command line.
+
+`volume_style.py` holds the colours, number format and spin box the two 3D windows
+share, so they cannot drift apart.
 
 ---
 
@@ -216,6 +222,8 @@ says which is in force.
 - **HKL range** — per-axis limits, or **Whole map**
 - **Downsampling** — **On** plus **Max drawn**; takes every Nth point so the cloud
   thins evenly rather than losing a corner of reciprocal space
+- **Gridded volume** — **Grid & load (.vti)** bins the pixels onto a regular grid
+  over the HKL range set above and draws that instead; see below
 
 The cloud is coloured by intensity with **opacity rising along the scale**, so faint
 points fade out instead of filling the view with haze.
@@ -231,6 +239,259 @@ keeps drawing.
 
 The H/K/L axes stay pinned to the whole map whatever is drawn, so hiding the points
 or showing only a slice does not rescale them.
+
+---
+
+## `hkl_grid.py` — the gridded map
+
+The 3D viewer draws a point cloud, which keeps every pixel's exact position but is
+expensive to rebuild. Gridding bins the same pixels onto a regular lattice — mean
+intensity per cell, unmeasured cells left as `NaN` — and writes a **VTK ImageData
+(`.vti`)** file that ParaView, pyvista or any analysis script can open.
+
+**From the viewer.** Set the **HKL range** (or leave **Whole map** ticked) and press
+**Grid & load (.vti)**. The file is written beside the image file; pressing it again
+reloads it rather than redoing the work. **Show volume** switches between the grid
+and the cloud, and **Cell size ×** scales the automatic resolution.
+
+What the cached file was made for is recorded inside it and checked, so it is only
+reused when the **HKL range**, the **frame range**, the **cell size** and the
+**geometry** all still match. Edit a limit, or the UB, energy, distance or angles in
+the Conversion setup window, and it grids afresh rather than handing back a stale
+map. The grid always uses whatever the setup window currently holds, edits included.
+
+**From analysis code.**
+
+```python
+from hkl_grid import grid_to_vti, load_vti
+
+path = grid_to_vti("pva_tise2_2_00152.h5",
+                   hkl_range=(0.93, 1.11, -0.60, -0.36, 7.39, 7.66))
+grid = load_vti(path)
+volume = grid["intensity"].reshape(grid.dimensions, order="F")   # NaN where unmeasured
+```
+
+or on the command line:
+
+```bash
+python hkl_grid.py pva_tise2_2_00152.h5
+python hkl_grid.py pva_tise2_2_00152.h5 --range 0.93 1.11 -0.60 -0.36 7.39 7.66
+python hkl_grid.py pva_tise2_2_00152.h5 --oversample 0.75     # finer
+```
+
+The master file is found beside the image file unless `--master` says otherwise.
+
+### Two different numbers, and why it matters
+
+At every pixel the three sampling directions — along a detector row, along a
+column, and from one frame to the next — span a small parallelepiped in reciprocal
+space. Two things can be measured from it, and using one for the other is the easy
+mistake:
+
+| | on the example scan | what it is |
+|---|---|---|
+| **volume** `\|(drow × dcol) · dframe\|` | cube of side **6.7e-4** | the HKL volume one sample speaks for → the **cell size** |
+| **axis-aligned extent** | **3.6e-4, 1.3e-3, 5.6e-4** | how far one sample reaches per axis → the **fuzzy footprint** |
+
+They differ a lot because the parallelepiped is strongly skewed. Consecutive frames
+are 1.2e-3 apart measured *perpendicular to the detector surface*, while pixels
+within a frame are 4.9e-4 apart — the frames are about 2.5× further apart than the
+detector samples. Most of the frame-to-frame motion slides *along* the surface
+rather than away from it, so reading the per-axis extent as a cell size makes the
+rocking axis look fourteen times coarser than it is.
+
+### Why the samples are spread, not just binned
+
+That 2.5× gap is why plain nearest-cell binning cannot be made fine. At a 6.7e-4
+cell it leaves roughly one empty layer between every pair of frame surfaces — 83% as
+many empty cells inside the shell as filled ones, which reads as stripes. Spreading
+each sample over its footprint instead (fuzzy gridding, via
+`xrayutilities.FuzzyGridder3D`) drops that to **3.3%** at the same cell size, and is
+several times faster. So the grid is fine *and* continuous.
+
+`Cell size ×` scales the automatic value: below 1 is finer at several times the
+memory, above 1 lighter. Total cells are capped at 100 M (`--max-cells`), about
+1.6 GB while gridding; past that the cell is coarsened rather than the machine
+swapped.
+
+### Unmeasured cells
+
+About a third of the bounding box holds data. The rest was never visited: each frame
+maps to a *curved* surface, so the swept volume is a skewed shell and an axis-aligned
+box around it is mostly outside. That is geometry, not a resolution problem, and
+coarsening does not fix it.
+
+Those cells are written as `NaN` so analysis can mask them. Anything **drawing** the
+grid must replace them first — NaN handed to a GPU volume mapper does not come out
+transparent, it lights the whole empty region up. `hkl_grid.make_drawable()` does
+this, and the viewer calls it on load.
+
+---
+
+## `vti_viewer.py` — the saved grid, on its own
+
+The same scene as the HKL viewer — a volume on black with H/K/L axes, an arbitrary
+slice plane and the opacity ramp — but it reads a finished `.vti` and nothing else.
+
+```bash
+python vti_viewer.py pva_tise2_2_00152_hkl_grid.vti
+python vti_viewer.py                 # asks for a file
+```
+
+**File ▸ Open folder…** (`Ctrl+O`) lists every `.vti` in a folder down the left;
+click one to open it, or walk the list with the arrow keys. Opening a single file
+lists its neighbours too. **Keep the current set-up** carries everything over to the
+next file you click — colormap, intensity range, HKL range, the slice with its
+normal, offset and averaging, and the camera — so a set of scans can be compared in
+the same corner of reciprocal space from the same angle, and the 2D window and its
+cuts follow along. Turn it off and each file opens on its own full extent.
+
+The file list, the controls and the 3D view are separated by splitters, so any of
+them can be given more room; the controls start wide enough to show every box whole.
+
+Two reasons to use it rather than the HKL viewer:
+
+- **It opens in about a second.** There is no conversion: the grid is already the
+  answer. The HKL viewer has to convert every pixel before it can draw anything.
+- **It needs neither `xrayutilities` nor `h5py`**, only `numpy`, `pyqt` and
+  `pyvista`. A grid can be looked at, sliced and cropped on a machine that could not
+  have produced it — a laptop, a collaborator's desktop — with no beamline data
+  present.
+
+The panel is the HKL viewer's, minus what has no meaning without the detector data:
+no conversion setup, no point cloud, no downsampling. **Colormap**, **Show volume**,
+**Show slice** with the same arbitrary normal, **⊥H ⊥K ⊥L**, offset and
+**Lock slice**, **Intensity range**, and an **HKL range** that cuts the volume down
+to a box.
+
+**Average over** gives the slice a thickness. A plane has none, so a one-cell slice
+is as noisy as the data gets; averaging a few cells either side along the normal
+trades a little resolution across the plane for much less noise in it. On the example
+grid the point-to-point scatter falls from 5.4 at one cell to 3.5 at nine and 2.3 at
+twenty-five. The 2D window follows the same setting, so both show the same slab.
+
+**Offset step** sets how far one click of the offset arrows (or one arrow key) moves
+the plane. Opening a file sets it to the grid's cell size, so a click steps one cell
+— the smallest move that can show anything new — and you can type anything else. **File ▸ Open…** (`Ctrl+O`) loads another grid.
+
+One deliberate difference: the slice is a **true plane through the volume**, cut by
+pyvista's own `add_mesh_slice`, where the HKL viewer draws a slab of nearby points.
+On a regular grid that comes out as a clean image rather than a scatter, so there is
+no thickness to set.
+
+That is also why it stays responsive on a 77-million-cell grid: `add_mesh_slice`
+drives a `vtkCutter` straight from the plane widget, so dragging recuts inside the
+VTK pipeline rather than re-slicing from Python on every event. The normal and offset
+boxes are filled in from the widget when you let go of it. **Lock slice** has no
+widget to drive the cutter, so there the plane is cut once and drawn as a plain mesh.
+
+Any VTK ImageData opens, not only the grids from `hkl_grid.py`; the axes are
+labelled H/K/L because that is what these files hold, and an array under another
+name is drawn as-is.
+
+### The slice as a flat image
+
+**Slice as 2D image…** opens the plane on its own, drawn with matplotlib: axis
+labels, tick numbers, a colour bar, the matplotlib toolbar for zoom and save, and a
+cursor readout giving the full **H, K, L** and the intensity under the pointer. It
+follows the plane, the crop and the colour settings as you change them in the 3D
+window.
+
+What the axes are labelled with depends on the plane, because only some planes have
+HKL axes lying in them:
+
+| slice | horizontal | vertical | above the plot |
+|---|---|---|---|
+| ⊥L | `H` | `K` | `L = 7.5215` |
+| ⊥H | `K` | `L` | `H = 1.0390` |
+| normal [1 1 0] | `L` | `along [0.707 -0.707 0.000]` | the normal and a point on it |
+| normal [1 2 3] | `along […]` | `along […]` | the normal and a point on it |
+
+Each axis is judged on its own: a plane can have one image axis running exactly along
+an HKL axis and the other not, and then only that one carries real H/K/L tick
+numbers. The other is labelled with the direction it runs in and its ticks are a
+distance from the plane's centre — but the cursor readout always gives the true
+H, K, L, whatever the plane.
+
+**Log intensity** colours by the logarithm, which is usually the only way to see a
+weak feature beside a Bragg peak. Zero and unmeasured cells stay blank — a log has
+nothing to say about them. The scale runs **5 decades below the top** unless you set
+a positive **Min** in the 3D window: fuzzy gridding leaves cells holding a millionth
+of a count, and a floor at the smallest positive value would spread the colours over
+twenty decades and squeeze everything real into the top fifth of the map.
+
+**Cuts** offers two kinds, one at a time so each gets the width to be read:
+
+- **Along the axes** — a profile down each axis of the image, taken through a
+  crosshair. Click anywhere on the image to move it. The profiles are drawn against
+  the same H/K/L axes as the image and stay lined up with it.
+- **Arbitrary line** — drag a line anywhere on the image and read the profile along
+  it, against distance in HKL from the start of the line. Useful for cutting along a
+  streak or a rod that does not run down an axis. It is sampled at the image's own
+  pixel pitch and starts as a line across the middle, before you drag one.
+
+**Cut width** averages that many rows, columns, or parallel offsets into the cut: one
+pixel is the true profile, a few average the noise down. That is averaging *within*
+the plane; **Average over** in the 3D window averages *through* it, and the two
+compose. With **Log intensity** on the
+profiles' intensity axes go logarithmic too. The status line gives the H, K, L the
+cut passes through — for a line, both endpoints and its length.
+
+### Getting the numbers out
+
+Two buttons, and the format follows the extension you type (or the filter you pick):
+**`.txt`/`.dat`** plain text, **`.csv`**, **`.npz`** for a Python session, **`.h5`**.
+Every file carries a header naming the source `.vti`, the plane, its normal and the
+slab thickness, so it can be read months later.
+
+**Export image…** writes the slice as a 2D array with its axes: the ASCII form is a
+plain matrix, rows along y and columns along x, under a header giving each axis's
+label, range, point count and step; the CSV puts the x values in the first row and
+the y values in the first column so a spreadsheet shows the map; `.npz` and `.h5`
+hold `intensity`, `x` and `y` as separate arrays. Unmeasured cells are `nan`.
+
+**Export cut…** writes the cut as columns — **position, H, K, L, intensity** for
+every point along it. For the arbitrary line, position is the distance from its
+start, and the header records both endpoints in H, K, L. For the axis cuts you get
+one file per axis in text form (`…_along_H.txt`, `…_along_K.txt`), or both in one
+`.npz`/`.h5`. The two endpoints are also shown under the toolbar while the line is
+active, so they can be read off without exporting.
+
+The plane is resampled onto a regular lattice at the grid's own cell size
+(trilinearly, via `scipy.ndimage`), so the image resolution matches the data rather
+than being interpolated up. Cells the scan never reached are left blank instead of
+being painted the bottom colour of the map. HKL is treated as one Cartesian frame, as
+it is in the 3D view, so the image is drawn at equal aspect.
+
+### What costs time
+
+Everything scales with the cell count, close to linearly — a 2.9 M-cell grid does in
+0.05 s what a 77 M-cell one takes 1.3 s to do. Two things are worth knowing:
+
+- **Recolouring does not rebuild.** Changing the colormap or the intensity limits
+  moves no cells, so the lookup table is swapped on the actors already in the scene:
+  about 17 ms rather than 1.3 s. Only a change of *what* is drawn — the crop, the
+  slice plane, show/hide — rebuilds.
+- **Moving the slice does not rebuild either.** The normal, the offset and the
+  ⊥H ⊥K ⊥L presets drive the cutter that is already in the scene, so the plane moves
+  in about 30 ms and the axes are left alone — they used to be torn down and redrawn
+  on every step, which is what made them flicker. Locking only switches the handles
+  off; the slice stays put.
+- **Dragging cuts once, on release.** The handle moves freely and the slice follows
+  when you let go.
+- **`generate_triangles=True` on the cutter.** pyvista defaults it off, which puts
+  `vtkCutter` on an unthreaded path that builds general polygons: 1.18 s against
+  0.028 s here, for output identical to the point. This one flag was most of the
+  sluggishness.
+- **The volume coarsens while the camera moves.** `AutoAdjustSampleDistances` is off
+  by default, so every frame of a rotation was rendered at full quality; on, VTK
+  drops the ray sampling during the move and sharpens again when it stops.
+
+What still rebuilds is loading, cropping and showing/hiding the volume — around a
+second at 77 M cells, since the volume has to be handed to VTK again. If that is too
+slow for the way you are working, the lever is **Cell size ×** when the grid is made:
+at 2 the grid is eight times smaller and those operations are roughly eight times
+quicker.
 
 ---
 

@@ -12,6 +12,12 @@
 #                    -> numpy, h5py, pyqtgraph, pyqt, hdf5plugin
 #   hkl_viewer.py    the 3D reciprocal-space map
 #                    -> xrayutilities, pyvista, pyvistaqt, vtk
+#   hkl_grid.py      bins that map onto a regular grid, saved as .vti
+#                    -> xrayutilities, pyvista
+#   vti_viewer.py    opens a saved .vti on its own
+#                    -> pyvista, pyvistaqt, vtk  (no xrayutilities, no h5py)
+#   slice_plot.py    the slice plane as a flat image with H/K/L axes
+#                    -> matplotlib, scipy
 #
 # hdf5plugin looks optional -- it is imported in a try/except -- but the pva
 # image stacks are blosc-compressed, so without it the frames cannot be
@@ -49,3 +55,6 @@ dependencies:
   - pyvista >=0.44        # tested 0.46.3
   - pyvistaqt >=0.11      # Qt interactor; tested 0.11.3
   - vtk >=9.2             # tested 9.5.2
+
+  # --- slice_plot.py (the slice as a flat image) ---
+  - scipy >=1.10          # ndimage.map_coordinates resamples the plane; tested 1.16.2
