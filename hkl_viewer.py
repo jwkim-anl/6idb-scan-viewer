@@ -46,6 +46,15 @@ import xrayutilities as xu
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+from volume_style import AXIS_COLOR
+from volume_style import AXIS_NAMES
+from volume_style import AXIS_NUMBER_FORMAT
+from volume_style import BACKGROUND
+from volume_style import COLORMAPS
+from volume_style import SCALAR_BAR
+from volume_style import SLICE_COLOR
+from volume_style import spin as _spin
+
 from image_viewer import MASTER_PRIMARY_PATH
 from image_viewer import master_path_for_image
 from image_viewer import nearest_index
@@ -474,17 +483,6 @@ def convert(
 # -- shared widget helpers ---------------------------------------------------
 
 
-def _spin(value, low, high, decimals=4, step=1.0, width=110):
-    box = QtWidgets.QDoubleSpinBox()
-    box.setRange(low, high)
-    box.setDecimals(decimals)
-    box.setSingleStep(step)
-    box.setFixedWidth(width)
-    box.setKeyboardTracking(False)
-    box.setValue(value)
-    return box
-
-
 def _axis_combo(value):
     combo = QtWidgets.QComboBox()
     combo.addItems(AXIS_CHOICES)
@@ -694,19 +692,6 @@ class ConversionSetupDialog(QtWidgets.QDialog):
 
 # -- the 3D window -----------------------------------------------------------
 
-COLORMAPS = ("viridis", "plasma", "inferno", "magma", "turbo", "jet", "gray")
-AXIS_NAMES = ("H", "K", "L")
-BACKGROUND = "black"
-AXIS_COLOR = "white"
-# The plane widget draws in one colour; the default is far too dark on black.
-SLICE_COLOR = "yellow"
-# pyvista takes the scalar bar's text colour from the theme font, which is
-# black -- the numbers vanish against the background unless it is set here.
-SCALAR_BAR = {"color": AXIS_COLOR, "title": "intensity"}
-# HKL is a small number that matters in its third decimal -- 5.321, not 5.3.
-AXIS_NUMBER_FORMAT = "%.3f"
-
-
 class HklWindow(QtWidgets.QMainWindow):
     """A 3D map of reciprocal space.
 
@@ -719,6 +704,9 @@ class HklWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.geometry_data = read_geometry(Path(image_path), master_path)
         self.cloud: HklCloud | None = None
+        self.grid = None                 # the loaded .vti, when one has been made
+        self.grid_path: Path | None = None
+        self.grid_range: tuple | None = None
         self._updating = False
         # Only a fresh conversion re-frames the view; toggling a checkbox must
         # not throw away the angle the user has set up.
@@ -917,6 +905,42 @@ class HklWindow(QtWidgets.QMainWindow):
         self.display_points_spin.setValue(500_000)
         self.display_points_spin.valueChanged.connect(self.refresh_view)
         form.addRow("Max drawn", self.display_points_spin)
+        layout.addWidget(box)
+
+        # -- gridded volume --
+        box = QtWidgets.QGroupBox("Gridded volume")
+        form = QtWidgets.QFormLayout(box)
+        self.grid_button = QtWidgets.QPushButton("Grid && load (.vti)")
+        self.grid_button.setToolTip(
+            "Bin the pixels onto a regular HKL grid over the range above and\n"
+            "save it beside the image file as a .vti.\n"
+            "The cell size is taken from the data: no finer than the spacing\n"
+            "the scan actually sampled, which differs per axis because the\n"
+            "rocking step is much coarser than the detector pixels.\n"
+            "An existing grid for the same range is loaded instead of redone."
+        )
+        self.grid_button.clicked.connect(self.grid_and_load)
+        form.addRow(self.grid_button)
+        self.detail_spin = _spin(1.0, 0.25, 8.0, 2, 0.25, 72)
+        self.detail_spin.setToolTip(
+            "Scales the automatic cell size. 1 is a cell holding about one\n"
+            "sample, which is as fine as the scan can justify. Below 1 gives a\n"
+            "finer grid at several times the memory; above 1 a coarser, lighter\n"
+            "one. Each value is cached separately."
+        )
+        form.addRow("Cell size ×", self.detail_spin)
+        self.show_volume_check = QtWidgets.QCheckBox("Show volume")
+        self.show_volume_check.setEnabled(False)
+        self.show_volume_check.setToolTip(
+            "Draw the grid instead of the point cloud. Rendering a loaded grid\n"
+            "costs a fraction of re-converting and drawing every pixel."
+        )
+        self.show_volume_check.toggled.connect(self._volume_shown_toggled)
+        form.addRow(self.show_volume_check)
+        self.grid_label = QtWidgets.QLabel("none")
+        self.grid_label.setWordWrap(True)
+        self.grid_label.setStyleSheet("color: gray;")
+        form.addRow(self.grid_label)
         layout.addWidget(box)
 
         layout.addStretch(1)
@@ -1161,8 +1185,17 @@ class HklWindow(QtWidgets.QMainWindow):
         self._show_unit_normal()
         self._draw_slab()
 
-    def _draw_slab(self):
-        """Just the slab actor -- used by the widget so dragging stays smooth."""
+    def _draw_slab(self, take_bar=None):
+        """Just the slab actor -- used by the widget so dragging stays smooth.
+
+        *take_bar* says whether the slab should carry the scalar bar; left out
+        (as it is on the drag path) it takes it only when nothing else has.
+        """
+        if take_bar is None:
+            take_bar = not (
+                self.show_points_check.isChecked()
+                or (self.show_volume_check.isChecked() and self.grid is not None)
+            )
         if self.plotter is None:
             return
         import pyvista as pv
@@ -1191,10 +1224,134 @@ class HklWindow(QtWidgets.QMainWindow):
             clim=(low, high),
             point_size=self.point_size_spin.value() * 1.6,
             name="slice",
-            show_scalar_bar=not self.show_points_check.isChecked(),
+            show_scalar_bar=take_bar,
             scalar_bar_args=dict(SCALAR_BAR),
             reset_camera=False,
         )
+
+    def requested_hkl_range(self):
+        """The box to grid: the panel's numbers, or None for the whole map."""
+        if self.hkl_auto_check.isChecked():
+            return None
+        out = []
+        for name in AXIS_NAMES:
+            low, high = (spin.value() for spin in self.hkl_spins[name])
+            out.extend((float(low), float(high)))
+        return tuple(out)
+
+    def grid_and_load(self):
+        """Bin the pixels onto a regular HKL grid and draw that instead.
+
+        The grid is written beside the image file. Asking again for a range
+        already on disk reloads it rather than repeating the work.
+        """
+        try:
+            from hkl_grid import GridCancelled
+            from hkl_grid import make_drawable
+            from hkl_grid import ensure_grid
+        except ImportError as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Gridding unavailable", f"hkl_grid could not be imported: {exc}"
+            )
+            return
+
+        hkl_range = self.requested_hkl_range()
+        progress = QtWidgets.QProgressDialog(
+            "Binning frames onto the HKL grid…", "Cancel", 0, 100, self
+        )
+        progress.setWindowTitle("HKL grid")
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        def report(done, total):
+            progress.setMaximum(total)
+            progress.setValue(done)
+            QtWidgets.QApplication.processEvents()
+            return not progress.wasCanceled()
+
+        # The geometry the setup window is currently holding, edits included,
+        # and the same frame range the cloud is using -- not a fresh read of
+        # the files, which would quietly ignore both.
+        arguments = self.setup_dialog.conversion_arguments()
+        self.grid_button.setEnabled(False)
+        try:
+            grid, path, regridded = ensure_grid(
+                self.geometry_data.image_path,
+                self.geometry_data.master_path,
+                hkl_range=hkl_range,
+                geometry=self.geometry_data,
+                oversample=self.detail_spin.value(),
+                first=arguments["first"],
+                last=arguments["last"],
+                frame_step=arguments["step"],
+                progress=report,
+            )
+        except GridCancelled:
+            self.status.showMessage("Gridding cancelled — nothing was written.")
+            return
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Gridding failed", f"{type(exc).__name__}: {exc}"
+            )
+            return
+        finally:
+            progress.close()
+            self.grid_button.setEnabled(True)
+
+        # NaN marks the cells the scan never reached. The volume mapper does not
+        # render it transparent -- it lights the whole empty region up -- so swap
+        # it for the bottom of the colour scale, in place to avoid copying a few
+        # hundred megabytes. The file on disk keeps the NaN.
+        span = make_drawable(grid)
+        self.grid, self.grid_path, self.grid_range = grid, path, hkl_range
+        filled, total = (int(v) for v in grid.field_data["filled_cells"])
+        self.grid_label.setText(
+            "{name}\n{dims} cells, step {step}\n{filled:,} measured ({pct:.0f}%){how}".format(
+                name=path.name,
+                dims="×".join(str(int(n)) for n in grid.dimensions),
+                step=" ".join(f"{float(v):.1e}" for v in grid.spacing),
+                filled=filled,
+                pct=100.0 * filled / max(total, 1),
+                how="" if regridded else "\nreused the file already on disk",
+            )
+        )
+
+        self._updating = True
+        self.show_volume_check.setEnabled(True)
+        self.show_volume_check.setChecked(True)
+        # The cloud and the grid hold the same data; drawing both would only
+        # cost time, and the grid is the reason for gridding.
+        self.show_points_check.setChecked(False)
+        if self.int_auto_check.isChecked():
+            self.int_min_spin.setValue(span[0])
+            self.int_max_spin.setValue(span[1])
+        self._updating = False
+        self.refresh_view()
+
+    def _volume_shown_toggled(self, _shown):
+        if not self._updating:
+            self.refresh_view()
+
+    def _draw_volume(self, lut, low, high, take_bar):
+        """Draw the loaded grid as a volume.
+
+        Cells the scan never reached were NaN; they are drawn from the NaN-free
+        copy at the bottom of the colour scale, where the opacity ramp starts at
+        zero, so the empty region stays invisible.
+        """
+        try:
+            self.plotter.add_volume(
+                self.grid,
+                scalars="intensity",
+                cmap=lut,
+                clim=(low, high),
+                name="volume",
+                show_scalar_bar=take_bar,
+                scalar_bar_args=dict(SCALAR_BAR),
+                reset_camera=False,
+            )
+        except Exception as exc:
+            self.status.showMessage(f"Volume rendering failed: {type(exc).__name__}: {exc}")
 
     def refresh_view(self):
         if self._updating:
@@ -1214,7 +1371,8 @@ class HklWindow(QtWidgets.QMainWindow):
             xlabel="H", ylabel="K", zlabel="L", color=AXIS_COLOR
         )
         bounds = self.display_bounds()
-        if points.shape[0] == 0:
+        showing_volume = self.show_volume_check.isChecked() and self.grid is not None
+        if points.shape[0] == 0 and not showing_volume:
             return
 
         low = self.int_min_spin.value()
@@ -1231,12 +1389,19 @@ class HklWindow(QtWidgets.QMainWindow):
                 clim=(low, high),
                 point_size=self.point_size_spin.value(),
                 name="points",
-                show_scalar_bar=True,
+                show_scalar_bar=True,   # first drawn owns the bar; see below
                 scalar_bar_args=dict(SCALAR_BAR),
                 reset_camera=False,
             )
 
-        self._draw_slab()
+        # One scalar bar between them: a second add_* with the same title
+        # stacks another bar on top of the first.
+        bar_taken = self.show_points_check.isChecked()
+        if showing_volume:
+            self._draw_volume(lut, low, high, take_bar=not bar_taken)
+            bar_taken = True
+
+        self._draw_slab(take_bar=not bar_taken)
 
         # plotter.clear() leaves widgets behind, so without this every redraw
         # would add another plane on top of the last -- several arrows at stale
@@ -1306,6 +1471,16 @@ class HklWindow(QtWidgets.QMainWindow):
                 "No diffractometer angles found in either file — every frame is "
                 "being treated as 0°, so this map is not meaningful. Check that "
                 "the master file is beside the image file."
+            )
+            return
+        if self.show_volume_check.isChecked() and self.grid is not None:
+            filled, total = (int(v) for v in self.grid.field_data["filled_cells"])
+            dims = "×".join(str(int(n)) for n in self.grid.dimensions)
+            step = " ".join(f"{float(v):.1e}" for v in self.grid.spacing)
+            self.status.showMessage(
+                f"{cloud.frames_used} frame(s) · gridded volume {dims} "
+                f"(step {step}) · {filled:,} of {total:,} cells measured "
+                f"({100.0 * filled / max(total, 1):.0f}%) · {self.grid_path.name}"
             )
             return
         self.status.showMessage(
