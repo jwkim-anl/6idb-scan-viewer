@@ -1,0 +1,51 @@
+# Conda environment for the Bluesky scan / image / HKL viewers.
+#
+#   conda env create -f environment.yml
+#   conda activate bluesky-scan-viewer
+#   python scan_viewer.py [directory]
+#
+# Three modules, and what each one needs:
+#
+#   scan_viewer.py   the scan browser and 1D/grid plots
+#                    -> numpy, h5py, matplotlib, pyqt
+#   image_viewer.py  the detector image window, ROIs and ROI plots
+#                    -> numpy, h5py, pyqtgraph, pyqt, hdf5plugin
+#   hkl_viewer.py    the 3D reciprocal-space map
+#                    -> xrayutilities, pyvista, pyvistaqt, vtk
+#
+# hdf5plugin looks optional -- it is imported in a try/except -- but the pva
+# image stacks are blosc-compressed, so without it the frames cannot be
+# decoded and the image viewer opens on an error instead of the data.
+#
+# pyvista/pyvistaqt/vtk are only imported when the HKL 3D window is opened.
+# Drop those four lines if that machine will not use it; the other two viewers
+# are unaffected. The 3D view needs a real OpenGL context, so it will not
+# render over a plain SSH session without X11 GLX or VirtualGL.
+
+name: bluesky-scan-viewer
+
+channels:
+  - conda-forge
+
+dependencies:
+  # tested against 3.11; the code uses PEP 604 annotations behind
+  # `from __future__ import annotations`
+  - python >=3.10,<3.13
+
+  # --- shared core ---
+  - numpy >=1.24          # tested 2.3.3
+  - h5py >=3.8            # tested 3.14.0
+  - hdf5plugin >=4.0      # blosc filters for entry/data/data; tested 6.0.0
+  - pyqt >=5.15,<6        # PyQt5 throughout; the code is not Qt6-ready
+
+  # --- scan_viewer.py ---
+  - matplotlib-base >=3.6 # needs the qtagg backend; tested 3.10.6
+
+  # --- image_viewer.py ---
+  - pyqtgraph >=0.13      # tested 0.13.7
+
+  # --- hkl_viewer.py (the 3D map) ---
+  - xrayutilities >=1.7   # area-detector Q conversion; tested 1.7.10
+  - pyvista >=0.44        # tested 0.46.3
+  - pyvistaqt >=0.11      # Qt interactor; tested 0.11.3
+  - vtk >=9.2             # tested 9.5.2

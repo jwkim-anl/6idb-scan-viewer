@@ -1,0 +1,1482 @@
+"""Browse a directory of Bluesky scans and plot them.
+
+For each ``*_master.hdf`` file written by ``MyNXWriter``
+(``callbacks/nexus_data_file_writer.py``), this shows:
+
+- a scan listing on the left -- one row per scan giving its number, plan,
+  motor, range, points and count time -- filled in as the directory is listed,
+  without having to select anything. Only files carrying Bluesky scan metadata
+  are listed; the sibling ``pva*.h5`` image files are not. Every column can be
+  dragged to a different width. The leading part of whatever is selected -- the
+  name up to the scan number, given once however many scans of that series are
+  picked -- is shown above the plot. An "Img" tick marks the
+  scans whose detector images sit beside them on disk. Click (or
+  ctrl/shift-click for several) to open one or more scans; Refresh picks up
+  new/changed files without losing the current selection,
+- the ``entry/instrument/bluesky/streams/primary`` stream, chosen from one
+  field table under the file list whose X / Y / Norm ticks drive the plot --
+  X and Norm take a single field each, Y any number (none by default). An
+  ``EPOCH`` entry (seconds past the UNIX epoch, one per point) joins the real
+  fields wherever the file records it. X
+  starts on the motor the scan moved, as named in its metadata -- the first
+  selected scan decides -- and stays wherever you put it once you pick one,
+  overlaid across every selected file, optionally normalized by dividing
+  each Y field by a selected monitor field. A two-motor grid scan is instead
+  drawn as a colour map over the two motors, with a colour scale; the "2D map"
+  button turns that off to plot the raster as an ordinary X-Y curve, zoomable by dragging (via the
+  plot toolbar's rectangle-zoom tool), with a peak-statistics table (max,
+  min, half-max center and FWHM) below the plot for each curve shown, and
+  a "Show dY/dX" toggle that overlays each curve's numerical derivative on
+  a secondary Y axis,
+- a "Baseline…" button opening a separate window with the
+  ``entry/instrument/bluesky/streams/baseline`` stream for one selected file at
+  a time, as a before/after table (the baseline stream records each field once
+  before the scan and once after),
+- a "Load Image" button that opens the detector frames belonging to the
+  selected file(s) in a separate 2D image window (see ``image_viewer.py``).
+  Selecting several files puts their images side by side in one window,
+  sharing ROIs, so scans can be compared. The frames are not in the master
+  file at all -- they live in a sibling ``pva*.h5`` written by the pvapy
+  streaming consumer.
+
+Each ``primary``/``baseline`` field is a subgroup holding ``EPOCH``, ``time``
+and (for a scalar field) ``value`` datasets -- confirmed by inspecting a real
+master file -- rather than a plain top-level dataset the way
+``entry/data`` stores its (smaller) set of fields. ``lambda250k`` itself has
+no ``value`` (its image lives elsewhere, linked separately) and is skipped.
+
+``image_viewer.py`` must sit beside this file -- the image window is imported
+from it.
+
+Run with the ``6idb-bits`` environment's Python, with a display available::
+
+    DISPLAY=localhost:10.0 \
+        /home/beams18/USER6IDB/.conda/envs/6idb-bits/bin/python scan_viewer.py \
+        [initial_directory]
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import h5py
+import numpy as np
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
+from matplotlib.figure import Figure
+from matplotlib.transforms import Bbox
+from PyQt5 import QtCore
+from PyQt5 import QtWidgets
+
+from image_viewer import ImageViewerWindow
+from image_viewer import resolve_image_file
+
+PRIMARY_PATH = "entry/instrument/bluesky/streams/primary"
+METADATA_PATH = "entry/instrument/bluesky/metadata"
+# Offered alongside the real fields: each primary field carries its own EPOCH
+# (seconds past the UNIX epoch, one per scan point), so absolute time can be an
+# axis like anything else.
+EPOCH_FIELD = "EPOCH"
+BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
+HDF_SUFFIXES = (".hdf", ".h5", ".hdf5")
+FILE_COLUMNS = ["Scan", "Img", "Plan", "Motor", "Range", "Pts", "Count [s]"]
+# Starting widths. Every column is user-resizable from here; the motor name is
+# the one that can run long, so it starts wide and is elided rather than
+# allowed to shove the other columns aside.
+FILE_COLUMN_WIDTHS = [58, 38, 72, 130, 118, 40, 66]
+IMAGE_COLUMN = 1
+MOTOR_COLUMN = 3
+HAS_IMAGE, NO_IMAGE = "✓", "–"
+FIELD_COLUMNS = ["Field", "X", "Y", "Norm"]
+FIELD_X, FIELD_Y, FIELD_NORM = 1, 2, 3
+
+
+def list_hdf_files(directory: Path) -> list[Path]:
+    """Return the HDF5 files directly inside *directory*, sorted by name."""
+    return sorted(
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in HDF_SUFFIXES
+    )
+
+
+def _is_time_like(name: str) -> bool:
+    return "time" in name.lower() or name == EPOCH_FIELD
+
+
+def stream_fields(path: Path, stream: str) -> list[str]:
+    """Field names under *stream* that carry a ``value`` dataset.
+
+    h5py iterates group keys in name order (no ``track_order`` here), so this
+    is also the order ``default_x_field`` treats as "last".
+    """
+    try:
+        with h5py.File(path, "r") as f:
+            group = f.get(f"entry/instrument/bluesky/streams/{stream}")
+            if group is None:
+                return []
+            names = [
+                name
+                for name in group.keys()
+                if isinstance(group[name], h5py.Group) and "value" in group[name]
+            ]
+            if _epoch_source(group) is not None:
+                names.append(EPOCH_FIELD)
+            return names
+    except OSError:
+        return []
+
+
+def _epoch_source(group) -> str | None:
+    """The field whose EPOCH stands for the scan's clock.
+
+    Every field records its own EPOCH and they disagree by a few seconds --
+    each device is stamped when it was read -- so one has to be picked. The
+    first in the group's (alphabetical) order is used, consistently, rather
+    than silently mixing time bases between axes.
+    """
+    for name in group.keys():
+        item = group[name]
+        if isinstance(item, h5py.Group) and "EPOCH" in item:
+            return name
+    return None
+
+
+def default_x_field(fields: list[str]) -> str | None:
+    """The last field, skipping trailing time-like ones (e.g. ``scaler_time``).
+
+    Only a fallback: :func:`scan_x_field` asks the scan what it moved.
+    """
+    for name in reversed(fields):
+        if not _is_time_like(name):
+            return name
+    return fields[-1] if fields else None
+
+
+def scan_x_field(path: Path, fields: list[str]) -> str | None:
+    """The field to plot against: the motor this scan actually moved.
+
+    Taken from the ``motors`` metadata rather than guessed from the field
+    ordering, and preferring the motor's readback over its setpoint. Returns
+    ``None`` when the scan names no motor that was recorded.
+    """
+    for motor in read_scan_info(path)["motors"]:
+        for candidate in (motor, f"{motor}_user_setpoint", f"{motor}_setpoint"):
+            if candidate in fields:
+                return candidate
+    return None
+
+
+def scan_number(path: Path) -> str:
+    """The scan number in a file name: ``00008`` from ``tise2_2_00008_master.hdf``.
+
+    The last run of digits wins, so the prefix's own digits (``tise2_2``) are
+    ignored and the sibling ``pva_tise2_2_00008.h5`` reports the same number.
+    """
+    stem = path.stem
+    if stem.endswith("_master"):
+        stem = stem[: -len("_master")]
+    digits = re.findall(r"\d+", stem)
+    return digits[-1] if digits else stem
+
+
+def file_prefix(path: Path) -> str:
+    """The part of a file name in front of the scan number: ``tise2_2``.
+
+    Everything from the scan number onwards is dropped, so the files of one
+    series all reduce to the same string.
+    """
+    stem = path.stem
+    if stem.endswith("_master"):
+        stem = stem[: -len("_master")]
+    digits = list(re.finditer(r"\d+", stem))
+    if not digits:
+        return stem
+    return stem[: digits[-1].start()].rstrip("_-. ") or stem
+
+
+def _as_text(value) -> str:
+    """An h5py scalar -- bytes, numpy scalar or 0-d array -- as plain text."""
+    value = np.asarray(value).reshape(-1)
+    if value.size == 0:
+        return ""
+    item = value[0]
+    return item.decode(errors="replace") if isinstance(item, bytes) else str(item)
+
+
+def _meta_text(group, key: str) -> str:
+    item = group.get(key)
+    return "" if item is None else _as_text(item[()])
+
+
+def _yaml_items(text: str) -> list[str]:
+    """The entries of a simple YAML block sequence (``- name`` per line).
+
+    ``motors`` and ``detectors`` are stored as YAML text (``motors`` even keeps a
+    ``!!python/tuple`` tag), so pull the items out directly rather than take a
+    PyYAML dependency for two one-line lists.
+    """
+    return [
+        line[2:].strip().strip("'\"")
+        for line in text.splitlines()
+        if line.startswith("- ")
+    ]
+
+
+# Reading this opens the file, and the browser re-reads the whole selection on
+# every selection change, so remember it per (path, mtime, size).
+_SCAN_INFO_CACHE: dict[tuple, dict] = {}
+
+
+def read_scan_info(path: Path) -> dict:
+    """What the scan was: plan, points, motors and the range they covered.
+
+    The motor names come from the ``motors`` metadata, and each one's actual
+    travel is read back from its own field in the primary stream -- the
+    requested range in ``plan_args`` is not necessarily what the motor did.
+    """
+    path = Path(path)
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_mtime, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _SCAN_INFO_CACHE:
+        return _SCAN_INFO_CACHE[key]
+
+    info = {
+        "file": path.name,
+        "is_scan": False,
+        "plan": "",
+        "points": "",
+        "motors": [],
+        "shape": [],
+        "detectors": [],
+        "ranges": [],          # (motor, first, last, n)
+        "count_time": None,
+        "started": "",
+        "plan_args": "",
+        "uid": "",
+    }
+    try:
+        with h5py.File(path, "r") as f:
+            meta = f.get(METADATA_PATH)
+            if meta is not None:
+                info["is_scan"] = True
+                info["plan"] = _meta_text(meta, "plan_name")
+                info["points"] = _meta_text(meta, "num_points")
+                info["motors"] = _yaml_items(_meta_text(meta, "motors"))
+                # grid_scan records the raster size here; a 1-D plan has none.
+                info["shape"] = [
+                    int(n) for n in _yaml_items(_meta_text(meta, "shape"))
+                    if n.lstrip("-").isdigit()
+                ]
+                info["detectors"] = _yaml_items(_meta_text(meta, "detectors"))
+                info["plan_args"] = _meta_text(meta, "plan_args")
+                info["uid"] = _meta_text(meta, "run_start_uid")
+
+            primary = f.get(PRIMARY_PATH)
+            if primary is not None:
+                for motor in info["motors"]:
+                    sub = primary.get(motor)
+                    if sub is None or "value" not in sub:
+                        continue
+                    values = np.asarray(sub["value"][()], dtype=float).ravel()
+                    if values.size:
+                        info["ranges"].append(
+                            (motor, float(values[0]), float(values[-1]), int(values.size))
+                        )
+                counter = primary.get("scaler_time")
+                if counter is not None and "value" in counter:
+                    seconds = np.asarray(counter["value"][()], dtype=float).ravel()
+                    if seconds.size:
+                        info["count_time"] = float(seconds[0])
+                for name in primary:
+                    field = primary[name]
+                    stamp = field.get("time") if isinstance(field, h5py.Group) else None
+                    if stamp is not None and "start_time_iso" in stamp.attrs:
+                        info["started"] = _as_text(stamp.attrs["start_time_iso"])[:19]
+                        break
+    except OSError:
+        pass
+
+    if key is not None:
+        _SCAN_INFO_CACHE[key] = info
+    return info
+
+
+def _grid_axis_candidates(available: list[str], motor: str) -> list[str]:
+    """Fields that could supply this motor's grid axis, best first.
+
+    The readback comes first, because it is where the motor actually was. It is
+    only usable when every row repeats its coordinates exactly, which a readback
+    that wanders by a few counts will not; the ``*_user_setpoint`` companion
+    holds the demanded value and always does. :func:`read_grid` tries them in
+    this order and keeps the first that reconstructs a raster.
+    """
+    names = (motor, f"{motor}_user_setpoint", f"{motor}_setpoint")
+    return [name for name in names if name in available]
+
+
+def _build_grid(slow, fast, values, shape, slow_name, fast_name) -> dict | None:
+    """Lay *values* onto the raster described by the two axis arrays, or ``None``."""
+    n_points = min(len(slow), len(fast), len(values))
+    if n_points < 4:
+        return None
+    slow, fast, values = slow[:n_points], fast[:n_points], values[:n_points]
+
+    # return_inverse gives each point's row/column straight off, so a snaked
+    # raster (alternate rows reversed) lands in the right place unaided.
+    y_axis, rows = np.unique(slow, return_inverse=True)
+    x_axis, columns = np.unique(fast, return_inverse=True)
+    if len(x_axis) < 2 or len(y_axis) < 2:
+        return None
+
+    complete = len(x_axis) * len(y_axis) == n_points
+    # A scan stopped part way has fewer rows than were asked for, so compare
+    # against the declared raster rather than expecting a full rectangle: the
+    # fast axis must be the declared width, the slow axis no taller.
+    declared = (
+        len(shape) == 2 and len(x_axis) == shape[1] and len(y_axis) <= shape[0]
+    )
+    if not (complete or declared):
+        return None
+
+    grid = np.full((len(y_axis), len(x_axis)), np.nan)
+    grid[rows, columns] = values
+    return {
+        "x_name": fast_name,
+        "y_name": slow_name,
+        "x": x_axis,
+        "y": y_axis,
+        "z": grid,
+        "points": n_points,
+    }
+
+
+def read_grid(
+    path: Path, value_field: str, monitor_field: str = ""
+) -> dict | None:
+    """*value_field* laid out over a two-motor grid scan, or ``None``.
+
+    ``None`` means "not a raster": a two-motor ``inner_product`` scan moves both
+    motors together, so its axes have as many levels as there are points and the
+    product test in :func:`_build_grid` fails, which is exactly what tells the
+    two plans apart without relying on the plan name.
+    """
+    info = read_scan_info(path)
+    if len(info["motors"]) != 2:
+        return None
+
+    available = stream_fields(path, "primary")
+    slow_options = _grid_axis_candidates(available, info["motors"][0])
+    fast_options = _grid_axis_candidates(available, info["motors"][1])
+    if not slow_options or not fast_options or value_field not in available:
+        return None
+
+    wanted = set(slow_options) | set(fast_options) | {value_field}
+    if monitor_field:
+        wanted.add(monitor_field)
+    try:
+        data = read_primary(path, list(wanted))
+    except OSError:
+        return None
+    if value_field not in data:
+        return None
+
+    values = data[value_field]
+    monitor = data.get(monitor_field) if monitor_field else None
+    if monitor is not None:
+        length = min(len(values), len(monitor))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            values = np.where(
+                monitor[:length] != 0, values[:length] / monitor[:length], np.nan
+            )
+
+    # Readback first, setpoint only if the readback will not form a raster.
+    for slow_name in slow_options:
+        for fast_name in fast_options:
+            if slow_name not in data or fast_name not in data:
+                continue
+            grid = _build_grid(
+                data[slow_name], data[fast_name], values,
+                info["shape"], slow_name, fast_name,
+            )
+            if grid is not None:
+                return grid
+    return None
+
+
+def axis_edges(values: np.ndarray) -> np.ndarray:
+    """Cell boundaries around the grid's sample positions.
+
+    Midway between neighbours, with the outer two extended by half their own
+    spacing, so uneven steps keep their proportions.
+    """
+    v = np.asarray(values, dtype=float)
+    if v.size == 1:
+        return np.array([v[0] - 0.5, v[0] + 0.5])
+    middles = (v[1:] + v[:-1]) / 2.0
+    return np.concatenate(([2 * v[0] - middles[0]], middles, [2 * v[-1] - middles[-1]]))
+
+
+def grid_stats(grid: dict) -> dict[str, float | None]:
+    """Max/min of a grid and the (x, y) they sit at."""
+    z = grid["z"]
+    stats = {"max_z": None, "max_at": None, "min_z": None, "min_at": None}
+    if not np.any(np.isfinite(z)):
+        return stats
+    flat_max = int(np.nanargmax(z))
+    flat_min = int(np.nanargmin(z))
+    for key, flat in (("max", flat_max), ("min", flat_min)):
+        row, column = np.unravel_index(flat, z.shape)
+        stats[f"{key}_z"] = float(z[row, column])
+        stats[f"{key}_at"] = (float(grid["x"][column]), float(grid["y"][row]))
+    return stats
+
+
+def read_primary(path: Path, fields: list[str]) -> dict[str, np.ndarray]:
+    """Read the ``value`` array of each of *fields* from the primary stream."""
+    out: dict[str, np.ndarray] = {}
+    with h5py.File(path, "r") as f:
+        group = f.get(PRIMARY_PATH)
+        if group is None:
+            return out
+        epoch_source = _epoch_source(group)
+        for name in fields:
+            if name == EPOCH_FIELD:
+                if epoch_source is not None:
+                    out[name] = np.asarray(
+                        group[epoch_source]["EPOCH"][()], dtype=float
+                    )
+                continue
+            item = group.get(name)
+            if item is not None and "value" in item:
+                out[name] = np.asarray(item["value"][()], dtype=float)
+    return out
+
+
+def _scalarize(value: np.ndarray):
+    """Return a plain float for a numeric size-1 array, else a short text summary.
+
+    Some baseline fields are waveform-valued (e.g. a UB matrix or a
+    pixel-center pair) rather than scalar, so ``value_start``/``value_end``
+    are not always convertible with a bare ``float()``. Others are size-1
+    but string-valued (e.g. a motor direction like ``b"y-"``), which
+    ``float()`` also rejects.
+    """
+    value = np.asarray(value)
+    if value.size == 1:
+        item = value.reshape(-1)[0]
+        if isinstance(item, bytes):
+            return item.decode(errors="replace")
+        try:
+            return float(item)
+        except (TypeError, ValueError):
+            return str(item)
+    return f"array{value.shape}: {np.array2string(value, precision=4, threshold=6)}"
+
+
+def read_baseline(path: Path) -> dict[str, tuple[object, object]]:
+    """Return ``{field: (before, after)}`` from the baseline stream.
+
+    ``before``/``after`` are ``float`` for a scalar field, or a text summary
+    for an array-valued one (see :func:`_scalarize`).
+    """
+    out: dict[str, tuple[object, object]] = {}
+    with h5py.File(path, "r") as f:
+        group = f.get(BASELINE_PATH)
+        if group is None:
+            return out
+        for name in group.keys():
+            sub = group[name]
+            if not isinstance(sub, h5py.Group):
+                continue
+            if "value_start" in sub and "value_end" in sub:
+                before = _scalarize(sub["value_start"][()])
+                after = _scalarize(sub["value_end"][()])
+            elif "value" in sub and sub["value"].shape and sub["value"].shape[0] >= 2:
+                value = np.asarray(sub["value"][()])
+                before, after = _scalarize(value[0]), _scalarize(value[-1])
+            else:
+                continue
+            out[name] = (before, after)
+    return out
+
+
+def _half_max_crossing(
+    x: np.ndarray, y: np.ndarray, half: float, start: int, stop: int, step: int
+) -> float | None:
+    """Linearly-interpolated X where *y* first crosses *half*, walking from
+    *start* to (but not including) *stop* in steps of *step*."""
+    i = start
+    while i != stop:
+        j = i + step
+        yi, yj = y[i], y[j]
+        if yi == half:
+            return x[i]
+        if (yi > half) != (yj > half):
+            frac = (half - yi) / (yj - yi)
+            return x[i] + frac * (x[j] - x[i])
+        i = j
+    return None
+
+
+def curve_stats(x: np.ndarray, y: np.ndarray) -> dict[str, float | None]:
+    """Max/min (with position), and FWHM center/width, for one plotted curve.
+
+    ``center``/``fwhm`` come from linearly-interpolated crossings of the
+    half-max level (halfway between the curve's min and max) either side of
+    the peak -- the same convention tools like SPEC's peak search use --
+    rather than a fit, so they are ``None`` when the peak sits at an end of
+    the data (no crossing on that side).
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x, y = x[finite], y[finite]
+
+    stats: dict[str, float | None] = {
+        "max_y": None,
+        "max_x": None,
+        "min_y": None,
+        "min_x": None,
+        "center": None,
+        "fwhm": None,
+    }
+    if x.size == 0:
+        return stats
+
+    imax = int(np.argmax(y))
+    imin = int(np.argmin(y))
+    stats["max_y"], stats["max_x"] = y[imax], x[imax]
+    stats["min_y"], stats["min_x"] = y[imin], x[imin]
+
+    half = (y[imax] + y[imin]) / 2.0
+    left = _half_max_crossing(x, y, half, imax, 0, -1)
+    right = _half_max_crossing(x, y, half, imax, len(x) - 1, 1)
+    if left is not None and right is not None:
+        stats["center"] = (left + right) / 2.0
+        stats["fwhm"] = abs(right - left)
+    return stats
+
+
+class HdfViewer(QtWidgets.QMainWindow):
+    """Directory-of-HDF5-files browser with a primary-stream plot and baseline table."""
+
+    def __init__(self, initial_directory: Path | None = None):
+        super().__init__()
+        self.setWindowTitle("6-ID-B HDF5 Scan Viewer")
+        self.resize(1400, 900)
+
+        self._settings = QtCore.QSettings("USER6IDB", "hdf5-viewer")
+        self._directory: Path | None = None
+        self._fields: list[str] = []
+        self._last_paths: tuple[str, ...] = ()
+        self._image_windows: list[ImageViewerWindow] = []
+        self._syncing_fields = False
+        self._colorbar = None
+        self._last_mode = ""
+        self._x_is_auto = True
+        self._manual_x = ""
+        self._last_x_field: str | None = None
+        self._last_monitor_field: str | None = None
+
+        self._build_ui()
+
+        start_dir = initial_directory
+        if start_dir is None:
+            remembered = self._settings.value("last_directory", "")
+            if remembered and Path(remembered).is_dir():
+                start_dir = Path(remembered)
+        if start_dir is not None and start_dir.is_dir():
+            self._set_directory(start_dir)
+
+    # -- UI construction ------------------------------------------------
+
+    def _build_ui(self):
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        root = QtWidgets.QVBoxLayout(central)
+
+        top = QtWidgets.QHBoxLayout()
+        open_btn = QtWidgets.QPushButton("Open Directory…")
+        open_btn.clicked.connect(self._choose_directory)
+        refresh_btn = QtWidgets.QPushButton("Refresh")
+        refresh_btn.clicked.connect(self._reload_file_list)
+        self.image_btn = QtWidgets.QPushButton("Load Image…")
+        self.image_btn.setEnabled(False)
+        self.image_btn.clicked.connect(self._open_image_viewers)
+        self.baseline_btn = QtWidgets.QPushButton("Baseline…")
+        self.baseline_btn.setToolTip(
+            "Show the baseline (before/after) values for one selected file."
+        )
+        self.baseline_btn.clicked.connect(self._show_baseline_window)
+        self.dir_label = QtWidgets.QLabel("No directory selected")
+        top.addWidget(open_btn)
+        top.addWidget(refresh_btn)
+        top.addWidget(self.image_btn)
+        top.addWidget(self.baseline_btn)
+        top.addWidget(self.dir_label, 1)
+        root.addLayout(top)
+
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        root.addWidget(splitter, 1)
+
+        # Left: the files, each with what its scan was.
+        left = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.addWidget(
+            QtWidgets.QLabel("HDF5 files (ctrl/shift-click for several):")
+        )
+        self.file_table = QtWidgets.QTableWidget(0, len(FILE_COLUMNS))
+        self.file_table.setHorizontalHeaderLabels(FILE_COLUMNS)
+        self.file_table.verticalHeader().setVisible(False)
+        self.file_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.file_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.file_table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        file_header = self.file_table.horizontalHeader()
+        # Interactive throughout: every column starts at a set width -- so a
+        # long motor name does not push the others around -- and any of them
+        # can be dragged wider or narrower. The last one takes up the slack.
+        file_header.setStretchLastSection(True)
+        for column, width in enumerate(FILE_COLUMN_WIDTHS):
+            file_header.setSectionResizeMode(column, QtWidgets.QHeaderView.Interactive)
+            self.file_table.setColumnWidth(column, width)
+        self.file_table.setWordWrap(False)
+        self.file_table.setTextElideMode(QtCore.Qt.ElideRight)
+        row_header = self.file_table.verticalHeader()
+        row_header.setMinimumSectionSize(16)
+        row_header.setDefaultSectionSize(18)
+        row_header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
+        self.file_table.itemSelectionChanged.connect(self._on_selection_changed)
+        left_layout.addWidget(self.file_table)
+
+        # The field chooser sits under the file list and drives all three axes.
+        left_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        left_splitter.addWidget(left)
+        left_splitter.addWidget(self._build_field_panel())
+        left_splitter.setSizes([520, 420])
+        splitter.addWidget(left_splitter)
+
+        splitter.addWidget(self._build_primary_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        # The scan listing gets about a third of the window.
+        total = self.width() or 1400
+        splitter.setSizes([total // 3, total - total // 3])
+
+        # Built now but shown only on demand, in its own window.
+        self._baseline_panel = self._build_baseline_panel()
+        self._baseline_window: QtWidgets.QDialog | None = None
+
+        self.status = self.statusBar()
+
+    def _build_field_panel(self) -> QtWidgets.QWidget:
+        """One row per primary field, with X / Y / Norm ticks.
+
+        X and Norm hold a single choice each -- ticking one clears the previous
+        -- while any number of Y fields can be on at once.
+        """
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(
+            QtWidgets.QLabel("Fields — X (one), Y (any number), Norm (one):")
+        )
+        self.field_table = QtWidgets.QTableWidget(0, len(FIELD_COLUMNS))
+        self.field_table.setHorizontalHeaderLabels(FIELD_COLUMNS)
+        self.field_table.verticalHeader().setVisible(False)
+        self.field_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.field_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.field_table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch
+        )
+        for column in range(1, len(FIELD_COLUMNS)):
+            self.field_table.horizontalHeader().setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeToContents
+            )
+        row_header = self.field_table.verticalHeader()
+        row_header.setMinimumSectionSize(16)
+        row_header.setDefaultSectionSize(18)
+        row_header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
+        self.field_table.itemChanged.connect(self._on_field_item_changed)
+        layout.addWidget(self.field_table)
+        return panel
+
+    def _build_primary_panel(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+
+        self.file_label = QtWidgets.QLabel("No scan selected")
+        self.file_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(self.file_label)
+
+        axis_row = QtWidgets.QHBoxLayout()
+        self.axis_label = QtWidgets.QLabel("")
+        axis_row.addWidget(self.axis_label, 1)
+        self.grid_btn = QtWidgets.QPushButton("2D map")
+        self.grid_btn.setCheckable(True)
+        self.grid_btn.setChecked(True)
+        self.grid_btn.setToolTip(
+            "Draw a two-motor grid scan as a colour map.\n"
+            "Untick to plot it as an ordinary X-Y curve instead.\n"
+            "Only active when the selected scan is a grid."
+        )
+        self.grid_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.grid_btn)
+
+        self.derivative_btn = QtWidgets.QPushButton("Show dY/dX")
+        self.derivative_btn.setCheckable(True)
+        self.derivative_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.derivative_btn)
+        layout.addLayout(axis_row)
+
+        canvas_box = QtWidgets.QVBoxLayout()
+        self.figure = Figure(figsize=(6, 4))
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.ax = self.figure.add_subplot(111)
+        # Shares the X axis with self.ax so the derivative overlay (dY/dX,
+        # generally a very different scale from Y) gets its own Y scale.
+        self.ax2 = self.ax.twinx()
+        # Kept so the grid's own readout can be swapped in and out.
+        self._default_format_coord = self.ax.format_coord
+        # Gives the standard matplotlib "zoom to rectangle" (drag to zoom),
+        # pan, and home/back/forward view-history controls.
+        self.toolbar = NavigationToolbar2QT(self.canvas, panel)
+
+        # The toolbar's built-in coordinate label lives inside the QToolBar, so
+        # once the readout grows past the space left over Qt shunts it into the
+        # overflow area and it vanishes -- which it did as soon as the labels
+        # carried field names. Route the message to a label of our own, on the
+        # row below, where it has the full width to itself.
+        self.coord_label = QtWidgets.QLabel("")
+        self.coord_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        if hasattr(self.toolbar, "locLabel"):
+            self.toolbar.locLabel.hide()
+        self.toolbar.set_message = self.coord_label.setText
+
+        toolbar_row = QtWidgets.QHBoxLayout()
+        toolbar_row.setContentsMargins(0, 0, 0, 0)
+        toolbar_row.addWidget(self.toolbar)
+        toolbar_row.addWidget(self.coord_label, 1)
+        canvas_box.addLayout(toolbar_row)
+        canvas_box.addWidget(self.canvas, 1)
+        canvas_widget = QtWidgets.QWidget()
+        canvas_widget.setLayout(canvas_box)
+        layout.addWidget(canvas_widget, 1)
+
+        layout.addWidget(QtWidgets.QLabel("Peak statistics (per plotted curve):"))
+        self.stats_table = QtWidgets.QTableWidget(0, 7)
+        self.stats_table.setHorizontalHeaderLabels(
+            ["Curve", "Max Y", "@X (max)", "Min Y", "@X (min)", "Center", "FWHM"]
+        )
+        self.stats_table.horizontalHeader().setStretchLastSection(True)
+        self.stats_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        # Half the height it used to take. Compact rows keep roughly the same
+        # number of curves visible in that space before scrolling.
+        self.stats_table.setMaximumHeight(80)
+        vertical_header = self.stats_table.verticalHeader()
+        vertical_header.setMinimumSectionSize(16)
+        vertical_header.setDefaultSectionSize(18)
+        # defaultSectionSize only wins when the rows are not auto-sized.
+        vertical_header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
+        layout.addWidget(self.stats_table)
+        return panel
+
+    def _build_baseline_panel(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+
+        top = QtWidgets.QHBoxLayout()
+        top.addWidget(QtWidgets.QLabel("Baseline (before/after) for file:"))
+        self.baseline_combo = QtWidgets.QComboBox()
+        self.baseline_combo.currentIndexChanged.connect(self._update_baseline)
+        top.addWidget(self.baseline_combo, 1)
+        layout.addLayout(top)
+
+        self.baseline_table = QtWidgets.QTableWidget(0, 4)
+        self.baseline_table.setHorizontalHeaderLabels(
+            ["Field", "Before scan", "After scan", "Δ (after − before)"]
+        )
+        self.baseline_table.horizontalHeader().setStretchLastSection(True)
+        self.baseline_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.baseline_table.setSortingEnabled(True)
+        layout.addWidget(self.baseline_table)
+        return panel
+
+    # -- Directory / file list -------------------------------------------
+
+    def _choose_directory(self):
+        start = str(self._directory) if self._directory else ""
+        directory = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Choose a directory of HDF5 files", start
+        )
+        if directory:
+            self._set_directory(Path(directory))
+
+    def _set_directory(self, directory: Path):
+        self._directory = directory
+        # A hand-picked X belongs to the run being looked at, not to the next
+        # directory; deselecting on the way to another scan must not lose it,
+        # so this is the one place automatic choice resumes.
+        self._x_is_auto = True
+        self._manual_x = ""
+        self.dir_label.setText(str(directory))
+        self._settings.setValue("last_directory", str(directory))
+        self._reload_file_list()
+
+    def _reload_file_list(self):
+        """List the directory, filling in each file's scan details as we go.
+
+        The scan columns are read for every file up front rather than on
+        selection, so the listing can be scanned for the run you want. Reads are
+        cached per (path, mtime, size), so a Refresh only touches new or changed
+        files.
+        """
+        if self._directory is None:
+            self.file_table.setRowCount(0)
+            return
+        selected_names = {path.name for path in self._selected_paths()}
+        self.file_table.blockSignals(True)
+        self.file_table.setRowCount(0)
+        # Only the scans: the sibling pva*.h5 image files carry no scan
+        # metadata, and their frames are reached through "Load Image…" anyway.
+        files = [p for p in list_hdf_files(self._directory) if read_scan_info(p)["is_scan"]]
+        self.file_table.setRowCount(len(files))
+        restore: list[int] = []
+        for row, path in enumerate(files):
+            for column, text in enumerate(self._scan_row(path)):
+                item = QtWidgets.QTableWidgetItem(text)
+                if column == 0:
+                    item.setData(QtCore.Qt.UserRole, str(path))
+                elif column == IMAGE_COLUMN:
+                    item.setTextAlignment(QtCore.Qt.AlignCenter)
+                self.file_table.setItem(row, column, item)
+            if path.name in selected_names:
+                restore.append(row)
+        self._select_rows(restore)
+        self.file_table.blockSignals(False)
+        self.status.showMessage(f"{len(files)} scan(s) in {self._directory}.")
+        self._on_selection_changed()
+
+    def _select_rows(self, rows: list[int]):
+        """Select every one of *rows*.
+
+        Not ``selectRow`` in a loop: in ExtendedSelection mode each call
+        *replaces* the selection, so restoring a multi-file selection after a
+        Refresh would keep only the last row.
+        """
+        model = self.file_table.model()
+        last_column = self.file_table.columnCount() - 1
+        selection = QtCore.QItemSelection()
+        for row in rows:
+            selection.select(model.index(row, 0), model.index(row, last_column))
+        self.file_table.selectionModel().select(
+            selection,
+            QtCore.QItemSelectionModel.Select | QtCore.QItemSelectionModel.Rows,
+        )
+
+    @staticmethod
+    def _scan_row(path: Path) -> list[str]:
+        """One file's cells: its scan number, then what that scan was."""
+        info = read_scan_info(path)
+        motors = ", ".join(name for name, *_ in info["ranges"]) or ", ".join(info["motors"])
+        span = ", ".join(
+            f"{start:.6g} → {stop:.6g}" for _name, start, stop, _n in info["ranges"]
+        )
+        return [
+            scan_number(path),
+            HAS_IMAGE if resolve_image_file(path) is not None else NO_IMAGE,
+            info["plan"],
+            motors,
+            span,
+            "x".join(str(n) for n in info["shape"]) if len(info["shape"]) == 2
+            else str(info["points"]),
+            "" if info["count_time"] is None else f"{info['count_time']:.6g}",
+        ]
+
+    def _selected_paths(self) -> list[Path]:
+        paths = []
+        for row in sorted({index.row() for index in self.file_table.selectedIndexes()}):
+            item = self.file_table.item(row, 0)
+            if item is not None:
+                paths.append(Path(item.data(QtCore.Qt.UserRole)))
+        return paths
+
+    # -- Selection handling -----------------------------------------------
+
+    def _on_selection_changed(self):
+        paths = self._selected_paths()
+        self._update_file_label(paths)
+        self._update_image_button(paths)
+        if not paths:
+            self._fields = []
+            self._syncing_fields = True
+            self.field_table.setRowCount(0)
+            self._syncing_fields = False
+            self.baseline_combo.clear()
+            self._update_plot()
+            self._update_baseline()
+            return
+        self._refresh_field_lists(paths)
+        self._refresh_baseline_combo(paths)
+        self._update_plot()
+        self._update_baseline()
+
+    def _refresh_field_lists(self, paths: list[Path]):
+        # Union of primary fields across every selected file, in the first
+        # file's order (which, absent track_order, is alphabetical).
+        primary_fields = stream_fields(paths[0], "primary")
+        seen = set(primary_fields)
+        for extra in paths[1:]:
+            for name in stream_fields(extra, "primary"):
+                if name not in seen:
+                    primary_fields.append(name)
+                    seen.add(name)
+
+        # The scan that leads the selection decides the default X.
+        preferred_x = (
+            scan_x_field(paths[0], primary_fields)
+            or default_x_field(primary_fields)
+            or ""
+        )
+
+        if primary_fields == self._fields:
+            # Same fields as before, so the ticks stand -- but a different scan
+            # may have been picked, and an X nobody chose by hand should follow
+            # it to that scan's own motor.
+            if self._x_is_auto and preferred_x and preferred_x != self._x_field():
+                self._set_x_field(preferred_x)
+            return
+        self._fields = primary_fields
+
+        # Carry the current choices over to the new field set.
+        current_x = self._manual_x if not self._x_is_auto else self._x_field()
+        current_y = set(self._checked_y_fields())
+        current_norm = self._monitor_field()
+        if self._x_is_auto or current_x not in primary_fields:
+            current_x = preferred_x
+        if current_norm not in primary_fields:
+            current_norm = ""
+
+        self._syncing_fields = True
+        try:
+            self.field_table.setRowCount(0)
+            self.field_table.setRowCount(len(primary_fields))
+            for row, name in enumerate(primary_fields):
+                label = QtWidgets.QTableWidgetItem(name)
+                self.field_table.setItem(row, 0, label)
+                states = (
+                    (FIELD_X, name == current_x),
+                    # No Y field is checked by default -- the user picks what to plot.
+                    (FIELD_Y, name in current_y),
+                    (FIELD_NORM, name == current_norm),
+                )
+                for column, checked in states:
+                    item = QtWidgets.QTableWidgetItem()
+                    item.setFlags(
+                        (item.flags() | QtCore.Qt.ItemIsUserCheckable)
+                        & ~QtCore.Qt.ItemIsSelectable
+                    )
+                    item.setCheckState(
+                        QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked
+                    )
+                    item.setTextAlignment(QtCore.Qt.AlignCenter)
+                    self.field_table.setItem(row, column, item)
+        finally:
+            self._syncing_fields = False
+        self.field_table.resizeColumnsToContents()
+        self.field_table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch
+        )
+
+    # -- Field choices -------------------------------------------------------
+
+    def _checked_in_column(self, column: int) -> list[str]:
+        names = []
+        for row in range(self.field_table.rowCount()):
+            tick = self.field_table.item(row, column)
+            label = self.field_table.item(row, 0)
+            if tick is not None and label is not None and tick.checkState() == QtCore.Qt.Checked:
+                names.append(label.text())
+        return names
+
+    def _set_x_field(self, name: str):
+        """Move the X tick to *name* without counting as a hand-made choice."""
+        self._syncing_fields = True
+        try:
+            for row in range(self.field_table.rowCount()):
+                tick = self.field_table.item(row, FIELD_X)
+                label = self.field_table.item(row, 0)
+                if tick is None or label is None:
+                    continue
+                tick.setCheckState(
+                    QtCore.Qt.Checked if label.text() == name else QtCore.Qt.Unchecked
+                )
+        finally:
+            self._syncing_fields = False
+
+    def _x_field(self) -> str:
+        names = self._checked_in_column(FIELD_X)
+        return names[0] if names else ""
+
+    def _checked_y_fields(self) -> list[str]:
+        return self._checked_in_column(FIELD_Y)
+
+    def _monitor_field(self) -> str:
+        """The normalization field, or ``""`` for none."""
+        names = self._checked_in_column(FIELD_NORM)
+        return names[0] if names else ""
+
+    def _on_field_item_changed(self, item: QtWidgets.QTableWidgetItem):
+        if self._syncing_fields:
+            return
+        column = item.column()
+        if column == FIELD_X:
+            # Remember the choice by name, not by reading the widget back: an
+            # empty selection clears the table, and the next scan would then
+            # find no X to carry over. Unticking hands control back.
+            label = self.field_table.item(item.row(), 0)
+            chosen = item.checkState() == QtCore.Qt.Checked and label is not None
+            self._manual_x = label.text() if chosen else ""
+            self._x_is_auto = not chosen
+        # X and Norm are single-choice: ticking one clears whatever held it.
+        if column in (FIELD_X, FIELD_NORM) and item.checkState() == QtCore.Qt.Checked:
+            self._syncing_fields = True
+            try:
+                for row in range(self.field_table.rowCount()):
+                    other = self.field_table.item(row, column)
+                    if other is not None and other is not item:
+                        other.setCheckState(QtCore.Qt.Unchecked)
+            finally:
+                self._syncing_fields = False
+        self._update_plot()
+
+    def _update_file_label(self, paths: list[Path]):
+        """Name the selected file(s) above the plot, by their leading part.
+
+        Only what comes before the scan number is shown, and a series shared by
+        several selected files is named once rather than repeated. The full
+        names are on the tooltip.
+        """
+        if not paths:
+            self.file_label.setText("No scan selected")
+            self.file_label.setToolTip("")
+            return
+        prefixes: list[str] = []
+        for path in paths:
+            prefix = file_prefix(path)
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+        self.file_label.setText(",  ".join(prefixes))
+        self.file_label.setToolTip("\n".join(str(path) for path in paths))
+
+    def _update_axis_label(self):
+        x_field = self._x_field() or "(pick one)"
+        monitor = self._monitor_field()
+        text = f"X: {x_field}    Y: {', '.join(self._checked_y_fields()) or '(none)'}"
+        if monitor:
+            text += f"    normalized by {monitor}"
+        self.axis_label.setText(text)
+
+    def _refresh_baseline_combo(self, paths: list[Path]):
+        names = [p.name for p in paths]
+        current = self.baseline_combo.currentText()
+        self.baseline_combo.blockSignals(True)
+        self.baseline_combo.clear()
+        self.baseline_combo.addItems(names)
+        self.baseline_combo.blockSignals(False)
+        if current in names:
+            self.baseline_combo.setCurrentText(current)
+
+    # -- Image windows ------------------------------------------------------
+
+    def _image_pairs(self, paths: list[Path]) -> list[tuple[Path, Path | None]]:
+        return [(path, resolve_image_file(path)) for path in paths]
+
+    def _resolved_images(self, paths: list[Path]) -> list[Path]:
+        """The image files for *paths*, in selection order and without repeats.
+
+        Two masters can point at the same image file, and a selection may mix a
+        master with its own image file; either way it should appear once.
+        """
+        images: list[Path] = []
+        for _master, image in self._image_pairs(paths):
+            if image is not None and image not in images:
+                images.append(image)
+        return images
+
+    def _update_image_button(self, paths: list[Path]):
+        """Enable "Load Image…" only for selections that have image files."""
+        found = self._resolved_images(paths)
+        self.image_btn.setEnabled(bool(found))
+        if not paths:
+            self.image_btn.setToolTip("Select a master file to load its detector images.")
+        elif not found:
+            self.image_btn.setToolTip("No pva*.h5 image file next to the selected file(s).")
+        elif len(found) == 1:
+            self.image_btn.setToolTip(f"Open {found[0].name}")
+        else:
+            self.image_btn.setToolTip(
+                f"Open {len(found)} images side by side, sharing ROIs:\n  "
+                + "\n  ".join(image.name for image in found)
+            )
+
+    def _open_image_viewers(self):
+        """Open the selected files' images -- several go side by side in one window."""
+        paths = self._selected_paths()
+        pairs = self._image_pairs(paths)
+        missing = [master.name for master, image in pairs if image is None]
+        images = self._resolved_images(paths)
+        if not images:
+            self.status.showMessage(f"No image file found for: {', '.join(missing)}")
+            return
+
+        try:
+            window = ImageViewerWindow(images, parent=self)
+        except (RuntimeError, OSError) as exc:
+            QtWidgets.QMessageBox.critical(self, "Could not open images", str(exc))
+            return
+
+        window.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+        window.destroyed.connect(lambda _=None, w=window: self._forget_image_window(w))
+        # Qt destroys a window that nothing holds a reference to.
+        self._image_windows.append(window)
+        window.show()
+
+        message = f"Opened {len(images)} image(s) in one window."
+        if missing:
+            message += f"  No image file found for: {', '.join(missing)}"
+        self.status.showMessage(message)
+
+    def _forget_image_window(self, window):
+        # Identity, not equality: this runs from destroyed(), by which point the
+        # underlying C++ object is gone and comparing wrappers can raise.
+        self._image_windows = [w for w in self._image_windows if w is not window]
+
+    # -- Plotting -----------------------------------------------------------
+
+    def _update_plot(self):
+        paths = self._selected_paths()
+        x_field = self._x_field()
+        y_fields = self._checked_y_fields()
+        monitor_field = self._monitor_field()
+        normalize = bool(monitor_field)
+        self._update_axis_label()
+
+        # Preserve a manual zoom/pan across redraws triggered by checkbox or
+        # dY/dX-toggle changes -- but only while the plot still shows the same
+        # data plotted the same way (same files, X field and normalization),
+        # otherwise old limits would be meaningless on the new data. Selecting
+        # a different file is a different scan, so its range is autoscaled
+        # afresh even when the X field happens to be the same one.
+        # A two-motor raster can be shown either as a colour map or, with the
+        # 2D map button off, as ordinary curves. Read it either way so the
+        # button can tell the user whether there is a raster to switch to.
+        grid = None
+        if paths and len(y_fields) == 1:
+            grid = read_grid(paths[0], y_fields[0], monitor_field)
+        self.grid_btn.setEnabled(grid is not None)
+        if not self.grid_btn.isChecked():
+            grid = None
+        mode = "grid" if grid is not None else "curves"
+
+        path_key = tuple(str(p) for p in paths)
+        same_view = (
+            path_key == self._last_paths
+            and x_field == self._last_x_field
+            and monitor_field == self._last_monitor_field
+            and mode == self._last_mode
+        )
+        prev_xlim = prev_ylim = None
+        if same_view and self.ax.lines:
+            if not self.ax.get_autoscalex_on():
+                prev_xlim = self.ax.get_xlim()
+            if not self.ax.get_autoscaley_on():
+                prev_ylim = self.ax.get_ylim()
+        self._last_paths = path_key
+        self._last_x_field = x_field
+        self._last_monitor_field = monitor_field
+        self._last_mode = mode
+
+        # A colour bar owns its own axes, which ax.clear() does not touch.
+        if self._colorbar is not None:
+            self._colorbar.remove()
+            self._colorbar = None
+        self.ax.clear()
+        self.ax2.clear()
+        self.ax.format_coord = self._default_format_coord
+        # self.ax2 shares the X axis with self.ax (twinx). matplotlib unions
+        # dataLim across every axes in that shared group when autoscaling --
+        # regardless of each one's own autoscale-on flag -- and clear() does
+        # NOT reset dataLim (it's left stale until new data replaces it), so
+        # self.ax2's last (e.g. derivative-off, file-A) data silently
+        # polluted self.ax's autoscaled range for the next file. Forcing it
+        # back to an empty bbox is what actually excludes it from that
+        # union; self.ax2 only ever gets its X range explicitly afterward.
+        self.ax2.dataLim = Bbox.null()
+        self.ax2.set_autoscalex_on(False)
+        if not paths or not x_field or not y_fields:
+            self.ax.set_title("Select file(s), an X field and at least one Y field.")
+            self.ax2.set_visible(False)
+            self.canvas.draw_idle()
+            self.stats_table.setRowCount(0)
+            return
+
+        if grid is not None:
+            self._plot_grid(paths, grid, y_fields[0], monitor_field, prev_xlim, prev_ylim)
+            return
+
+        overlay = len(paths) > 1
+        n_lines = 0
+        stats_rows: list[tuple[str, dict[str, float | None]]] = []
+        curves: list[tuple[str, np.ndarray, np.ndarray]] = []
+        for path in paths:
+            fields_needed = {x_field, *y_fields}
+            if normalize:
+                fields_needed.add(monitor_field)
+            try:
+                data = read_primary(path, list(fields_needed))
+            except OSError as exc:
+                self.status.showMessage(f"Could not read {path.name}: {exc}")
+                continue
+            if x_field not in data:
+                continue
+            x = data[x_field]
+            monitor = data.get(monitor_field) if normalize else None
+            if normalize and monitor is None:
+                self.status.showMessage(
+                    f"{path.name}: monitor field {monitor_field!r} not found -- plotting raw values."
+                )
+            for y_field in y_fields:
+                if y_field not in data:
+                    continue
+                y = data[y_field]
+                if monitor is not None:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        y = np.where(monitor != 0, y / monitor, np.nan)
+                label = f"{path.name}: {y_field}" if overlay else y_field
+                self.ax.plot(x, y, marker="o", markersize=3, linewidth=1, label=label)
+                n_lines += 1
+                stats_rows.append((label, curve_stats(x, y)))
+                curves.append((label, x, y))
+
+        self.ax.set_xlabel(x_field)
+        ylabel = ", ".join(y_fields)
+        if normalize:
+            ylabel += f" / {monitor_field}"
+        self.ax.set_ylabel(ylabel)
+        self.ax.grid(True, alpha=0.3)
+
+        # Resolve self.ax's autoscaled view now instead of leaving it to the
+        # deferred draw-time autoscale: self.ax2 shares the X axis (twinx)
+        # and, left to its own autoscale-on-draw, can win the shared-axis
+        # update with its own (possibly stale/empty) data limits -- that was
+        # the cause of the X range getting stuck on the derivative's old
+        # range after toggling dY/dX off and then selecting a new file.
+        self.ax.relim()
+        self.ax.autoscale_view()
+
+        show_derivative = self.derivative_btn.isChecked()
+        self.ax2.set_visible(show_derivative)
+        if show_derivative:
+            for label, x, y in curves:
+                if x.size < 2:
+                    continue
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    dy_dx = np.gradient(y, x)
+                finite = np.isfinite(dy_dx)
+                self.ax2.plot(
+                    x[finite],
+                    dy_dx[finite],
+                    linestyle="--",
+                    linewidth=1,
+                    label=f"d({label})/dx",
+                )
+            self.ax2.set_ylabel(f"d/d{x_field}")
+
+        handles, labels = self.ax.get_legend_handles_labels()
+        if show_derivative:
+            h2, l2 = self.ax2.get_legend_handles_labels()
+            handles, labels = handles + h2, labels + l2
+        if handles:
+            self.ax.legend(handles, labels, fontsize=8, loc="best")
+        if prev_xlim is not None:
+            self.ax.set_xlim(prev_xlim)
+        if prev_ylim is not None:
+            self.ax.set_ylim(prev_ylim)
+
+        # self.ax2's X autoscale is off (set above); give it self.ax's final
+        # range explicitly. Only its Y axis (the derivative's own scale)
+        # stays autoscaled. emit=False keeps this from propagating back over
+        # the shared X axis to self.ax, which would clear self.ax's
+        # autoscale-X flag on every redraw -- the flag is how the next redraw
+        # tells a real user zoom from a plain autoscaled view.
+        self.ax2.set_xlim(self.ax.get_xlim(), emit=False)
+
+        self.figure.tight_layout()
+        self.canvas.draw_idle()
+
+        self._update_stats_table(stats_rows)
+
+    def _plot_grid(self, paths, grid, value_field, monitor_field, prev_xlim, prev_ylim):
+        """Draw a two-motor raster as a colour map with a scale bar."""
+        self.ax2.set_visible(False)
+        label = value_field + (f" / {monitor_field}" if monitor_field else "")
+
+        x_edges, y_edges = axis_edges(grid["x"]), axis_edges(grid["y"])
+        mesh = self.ax.pcolormesh(x_edges, y_edges, grid["z"], shading="flat")
+
+        self.ax.set_xlabel(grid["x_name"])
+        self.ax.set_ylabel(grid["y_name"])
+        title = f"{paths[0].name}  —  {len(grid['x'])} x {len(grid['y'])} grid"
+        if len(paths) > 1:
+            # Two colour maps cannot share one pair of axes.
+            title += f"   (first of {len(paths)} selected)"
+        missing = int(np.count_nonzero(~np.isfinite(grid["z"])))
+        if missing:
+            title += f"   [{missing} point(s) not measured]"
+        self.ax.set_title(title, fontsize=9)
+        self.ax.grid(False)
+
+        # Autoscale cannot be relied on here: pcolormesh adds a *collection*,
+        # which relim() does not look at, and the twin axes sharing this X
+        # suppresses the draw-time rescale -- between them the X range was
+        # left at the empty default while Y came out right. Set both ends
+        # from the cell edges instead.
+        self.ax.set_xlim(x_edges[0], x_edges[-1])
+        self.ax.set_ylim(y_edges[0], y_edges[-1])
+        if prev_xlim is not None:
+            self.ax.set_xlim(prev_xlim)
+        if prev_ylim is not None:
+            self.ax.set_ylim(prev_ylim)
+        self.ax2.set_xlim(self.ax.get_xlim(), emit=False)
+
+        # Report the value under the pointer too. The stock readout gives only
+        # x and y (and, because of the twin axes, a second bare coordinate
+        # pair), so replace it outright rather than append to it.
+        def format_coord(x, y):
+            parts = [f"{grid['x_name']}={x:.6g}", f"{grid['y_name']}={y:.6g}"]
+            column = int(np.searchsorted(x_edges, x) - 1)
+            row = int(np.searchsorted(y_edges, y) - 1)
+            if 0 <= column < len(grid["x"]) and 0 <= row < len(grid["y"]):
+                value = grid["z"][row, column]
+                parts.append(
+                    f"{label}=" + ("no data" if not np.isfinite(value) else f"{value:.6g}")
+                )
+            return "   ".join(parts)
+
+        self.ax.format_coord = format_coord
+
+        # Lay the axes out *before* adding the colour bar. tight_layout()
+        # afterwards gives the bar's strip back to the plot and the bar ends
+        # up drawn on top of the map.
+        self.figure.tight_layout()
+        self._colorbar = self.figure.colorbar(mesh, ax=self.ax)
+        self._colorbar.set_label(label)
+        self.canvas.draw_idle()
+
+        stats = grid_stats(grid)
+        def at(point):
+            return "" if point is None else f"{point[0]:.6g}, {point[1]:.6g}"
+        self.stats_table.setRowCount(1)
+        values = [
+            label,
+            "" if stats["max_z"] is None else f"{stats['max_z']:.6g}",
+            at(stats["max_at"]),
+            "" if stats["min_z"] is None else f"{stats['min_z']:.6g}",
+            at(stats["min_at"]),
+            "", "",
+        ]
+        for column, text in enumerate(values):
+            self.stats_table.setItem(0, column, QtWidgets.QTableWidgetItem(text))
+        self.stats_table.resizeColumnsToContents()
+
+    def _update_stats_table(self, rows: list[tuple[str, dict[str, float | None]]]):
+        def fmt(value: float | None) -> str:
+            return "" if value is None else f"{value:.6g}"
+
+        self.stats_table.setRowCount(len(rows))
+        for row, (label, stats) in enumerate(rows):
+            values = [
+                label,
+                fmt(stats["max_y"]),
+                fmt(stats["max_x"]),
+                fmt(stats["min_y"]),
+                fmt(stats["min_x"]),
+                fmt(stats["center"]),
+                fmt(stats["fwhm"]),
+            ]
+            for col, text in enumerate(values):
+                self.stats_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+        self.stats_table.resizeColumnsToContents()
+
+    # -- Baseline -------------------------------------------------------
+
+    def _show_baseline_window(self):
+        """Open (or raise) the separate baseline window."""
+        if self._baseline_window is None:
+            window = QtWidgets.QDialog(self)
+            window.setWindowTitle("Baseline (before / after)")
+            window.resize(760, 560)
+            layout = QtWidgets.QVBoxLayout(window)
+            layout.setContentsMargins(6, 6, 6, 6)
+            layout.addWidget(self._baseline_panel)
+            self._baseline_window = window
+        # Show first: _update_baseline() does nothing while the window is
+        # hidden, so filling the table before showing it would leave it empty.
+        self._baseline_window.show()
+        self._baseline_window.raise_()
+        self._baseline_window.activateWindow()
+        self._refresh_baseline_combo(self._selected_paths())
+        self._update_baseline()
+
+
+    def _update_baseline(self):
+        window = getattr(self, "_baseline_window", None)
+        if window is None or not window.isVisible():
+            return  # nothing on screen to fill in; reading the file can wait
+        name = self.baseline_combo.currentText()
+        self.baseline_table.setRowCount(0)
+        if not name:
+            return
+        path = next((p for p in self._selected_paths() if p.name == name), None)
+        if path is None:
+            return
+        try:
+            baseline = read_baseline(path)
+        except OSError as exc:
+            self.status.showMessage(f"Could not read baseline of {name}: {exc}")
+            return
+
+        self.baseline_table.setSortingEnabled(False)
+        self.baseline_table.setRowCount(len(baseline))
+        for row, field in enumerate(sorted(baseline)):
+            before, after = baseline[field]
+            is_scalar = isinstance(before, float) and isinstance(after, float)
+            delta = f"{after - before:.6g}" if is_scalar else ""
+            values = [
+                field,
+                f"{before:.6g}" if isinstance(before, float) else str(before),
+                f"{after:.6g}" if isinstance(after, float) else str(after),
+                delta,
+            ]
+            for col, text in enumerate(values):
+                self.baseline_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
+        self.baseline_table.setSortingEnabled(True)
+        self.baseline_table.resizeColumnsToContents()
+
+
+def main():
+    initial_directory = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    app = QtWidgets.QApplication(sys.argv)
+    window = HdfViewer(initial_directory)
+    window.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
