@@ -803,19 +803,33 @@ class HklWindow(QtWidgets.QMainWindow):
         self.show_slice_check = QtWidgets.QCheckBox("Show slice")
         self.show_slice_check.toggled.connect(self._slice_shown_toggled)
         form.addRow(self.show_slice_check)
-        # An arbitrary plane: any normal, not just along an axis. The three
-        # buttons are shortcuts to the axis-aligned cases.
+        # An arbitrary plane: any normal, not just along an axis. Each component
+        # is labelled with its axis, and the range is wide enough to type a
+        # direction the way it is usually written -- [1 1 2] rather than a unit
+        # vector -- since only the direction matters and it is normalised on use.
         normal_row = QtWidgets.QHBoxLayout()
+        normal_row.setContentsMargins(0, 0, 0, 0)
+        normal_row.setSpacing(2)
         self.slice_normal_spins = []
-        for value in (0.0, 0.0, 1.0):
-            spin = _spin(value, -1.0, 1.0, 4, 0.05, 66)
+        for name, value in zip(AXIS_NAMES, (0.0, 0.0, 1.0)):
+            label = QtWidgets.QLabel(name)
+            label.setToolTip(f"{name} component of the plane normal")
+            spin = _spin(value, -1e4, 1e4, 4, 0.1, 62)
+            spin.setToolTip(
+                f"{name} component of the plane normal.\n"
+                "Type any direction -- [1 1 2] is fine, it does not have to be a\n"
+                "unit vector -- or drag the yellow arrow in the view."
+            )
             spin.valueChanged.connect(self.refresh_view)
+            normal_row.addWidget(label)
             normal_row.addWidget(spin)
             self.slice_normal_spins.append(spin)
         normal_widget = QtWidgets.QWidget()
         normal_widget.setLayout(normal_row)
-        normal_row.setContentsMargins(0, 0, 0, 0)
         form.addRow("Plane normal", normal_widget)
+        self.slice_unit_label = QtWidgets.QLabel("")
+        self.slice_unit_label.setToolTip("The same direction, normalised -- what the plane actually uses.")
+        form.addRow("", self.slice_unit_label)
 
         preset_row = QtWidgets.QHBoxLayout()
         preset_row.setContentsMargins(0, 0, 0, 0)
@@ -973,7 +987,11 @@ class HklWindow(QtWidgets.QMainWindow):
         self.refresh_view()
 
     def slice_plane(self):
-        """(unit normal, origin) of the cutting plane, in HKL."""
+        """(unit normal, origin) of the cutting plane, in HKL.
+
+        Whatever is typed is treated as a direction: only its orientation is
+        used, so [1 1 2] and its unit form give the same plane.
+        """
         normal = np.array([s.value() for s in self.slice_normal_spins], dtype=float)
         length = float(np.linalg.norm(normal))
         if length < 1e-12:
@@ -981,6 +999,12 @@ class HklWindow(QtWidgets.QMainWindow):
         normal = normal / length
         centre = self._cloud_centre()
         return normal, centre + normal * self.slice_offset_spin.value()
+
+    def _show_unit_normal(self):
+        normal, _ = self.slice_plane()
+        self.slice_unit_label.setText(
+            "unit:  %.3f, %.3f, %.3f" % tuple(normal)
+        )
 
     def _cloud_centre(self):
         bounds = None if self.cloud is None else self.cloud.bounds()
@@ -1132,6 +1156,9 @@ class HklWindow(QtWidgets.QMainWindow):
             self.slice_offset_spin.setValue(offset)
         finally:
             self._updating = False
+        # The guard above suppressed refresh_view, which is what normally keeps
+        # this in step, so update it here rather than leave a stale reading.
+        self._show_unit_normal()
         self._draw_slab()
 
     def _draw_slab(self):
@@ -1173,6 +1200,7 @@ class HklWindow(QtWidgets.QMainWindow):
         if self._updating:
             return
         points, intensity, in_range = self.visible_cloud()
+        self._show_unit_normal()
         self._report(points.shape[0], in_range)
         if self.plotter is None:
             return
