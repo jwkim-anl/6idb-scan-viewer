@@ -41,7 +41,9 @@ from hkl_grid import GridCancelled
 from hkl_grid import grid_to_vti
 from hkl_grid import measured_range
 from hkl_grid import natural_step
+from hkl_viewer import SETUP_FILENAME
 from hkl_viewer import read_geometry
+from hkl_viewer import read_setup
 from image_viewer import master_path_for_image
 from scan_viewer import scan_number
 from volume_style import AXIS_NAMES
@@ -213,6 +215,16 @@ class BatchGridWindow(QtWidgets.QMainWindow):
         holder.setLayout(row)
         form.addRow(holder)
 
+        self.setup_label = QtWidgets.QLabel("")
+        self.setup_label.setWordWrap(True)
+        self.setup_label.setStyleSheet("color: gray;")
+        self.setup_label.setToolTip(
+            f"A {SETUP_FILENAME} beside the data corrects the geometry for every\n"
+            "scan in the folder. Edit and save it from the HKL viewer's\n"
+            "Conversion setup window."
+        )
+        form.addRow(self.setup_label)
+
         self.found_label = QtWidgets.QLabel("")
         self.found_label.setWordWrap(True)
         self.found_label.setStyleSheet("color: gray;")
@@ -357,6 +369,15 @@ class BatchGridWindow(QtWidgets.QMainWindow):
         self.found = find_scans(folder)
         self.folder_label.setText(str(folder))
         self.output_label.setText(str(folder / OUTPUT_DIRECTORY))
+        try:
+            overrides = sorted(read_setup(folder))
+        except ValueError as exc:
+            self.setup_label.setText(f"{exc} — it will stop the run")
+        else:
+            self.setup_label.setText(
+                f"{SETUP_FILENAME} overrides: " + ", ".join(overrides)
+                if overrides else f"no {SETUP_FILENAME} — the files decide the geometry"
+            )
         if self.found:
             numbers = sorted(self.found)
             self.found_label.setText(
@@ -468,6 +489,13 @@ class BatchGridWindow(QtWidgets.QMainWindow):
                          else "  ".join(f"{a:.4f}…{b:.4f}" for a, b in zip(hkl[0::2], hkl[1::2])))
         )
         self._note("cell size: measured from the first scan, reused for the rest")
+        try:
+            overrides = sorted(read_setup(self.folder))
+        except ValueError as exc:
+            self._note(f"setup: {exc}")
+            overrides = []
+        if overrides:
+            self._note(f"setup: {SETUP_FILENAME} overrides " + ", ".join(overrides))
         self._note("")
 
         done = [0]

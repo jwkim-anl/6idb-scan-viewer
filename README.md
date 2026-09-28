@@ -209,6 +209,39 @@ came from — `[master]` or `[image]`:
 All of it is editable. **Apply and recompute** rebuilds the map; **Reset to file**
 restores what was read.
 
+**Where each parameter comes from.** Three sources, in this order — the first that
+has a value wins:
+
+| | supplies |
+|---|---|
+| **`hkl_setup.json`** in the folder | whatever you put in it, and nothing else |
+| **the master** | energy, detector distance, centre pixel, pixel directions, UB |
+| **the image file** | detector size, the six circle directions, the beam, in-plane and surface vectors — and the five above, when no master is found |
+
+Both files carry those five, and the master wins; the image file is the fallback. The
+panel tags every value with where it came from, so this is never guesswork.
+
+Two per-frame quantities take the *image* file in preference to the master, and are
+not overridable: the **angles**, because the master's read-back clock lags the
+exposure and shifted every frame of a test scan by a full step, and the **filter
+transmission**, because the master samples at scan points and misses the transient
+the free-running detector catches. **Angles from master** switches the first if you
+want it.
+
+**Correcting the geometry for a whole folder.** Everything in this window is
+editable, and **Save to folder** writes what you changed to `hkl_setup.json` beside
+the data. Every scan in that folder then opens with it — this viewer, `hkl_grid.py`
+and `batch_grid.py` alike — and each corrected value is tagged `setup` so it is clear
+where it came from. With no such file the files decide everything, as before.
+
+Only the values that *differ* from what the HDF5 files say are written, so saving a
+corrected detector distance does not quietly pin the energy and the UB as well. **Delete
+setup** removes the file and goes back to the files. A setup file that will not parse
+stops the scan opening with the reason rather than being ignored.
+
+The override is part of the grid's fingerprint, so a `.vti` made before a correction
+is re-gridded after it rather than being handed back stale.
+
 **Attenuator.** Some scans change their filter part way through, to hold a strong
 peak and a weak tail in range at once. Those frames are not on the same scale, so the
 map steps wherever the filter moved, and the detector often catches the change: in
@@ -383,6 +416,9 @@ reaches, so each scan keeps its own. This matters more than it sounds: on one te
 set, scan 153's footprint along K was 2.0e-4 where its neighbours' was 1.3e-3,
 because it was a different kind of scan. Forcing the first scan's footprint on it
 would have smeared it about sevenfold.
+
+If the folder holds an `hkl_setup.json`, the panel and the log say what it overrides,
+and every scan in the batch is converted with it.
 
 **Divide by filter transmission where it varies** applies the attenuator correction,
 decided per scan — a series can mix scans that moved their filter with scans that did

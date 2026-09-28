@@ -36,6 +36,7 @@ imported lazily -- the scan and image viewers must keep working without them.
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,11 @@ CA_PATH = "entry/data/metadata/ca"
 # The attenuator's transmission, as a fraction of the unattenuated beam.
 IMAGE_TRANSMISSION = "filter_trans"
 MASTER_TRANSMISSION = "filters_transmission"
+
+# A folder of scans shares a diffractometer, so a correction to the geometry
+# belongs beside the data rather than being retyped per scan. This file, if it
+# is there, is read after both HDF5 files and wins over them.
+SETUP_FILENAME = "hkl_setup.json"
 
 # The order the beamline turns them in, as stated by the instrument.
 SAMPLE_MOTORS = ("psic_mu", "psic_eta", "psic_chi", "psic_phi")
@@ -334,6 +340,122 @@ def _read_master_geometry(
         mark["angles"] = "master"
 
 
+def _as_floats(value, count):
+    values = [float(v) for v in np.asarray(value, dtype=float).ravel()]
+    if len(values) != count:
+        raise ValueError(f"expected {count} numbers, got {len(values)}")
+    return tuple(values)
+
+
+def _as_strings(value, count):
+    values = [str(v) for v in value]
+    if len(values) != count:
+        raise ValueError(f"expected {count} entries, got {len(values)}")
+    return values
+
+
+# What a setup file may override, and how each value is read back. Angles are
+# deliberately not here: they are per-frame and belong to the scan, not to the
+# instrument.
+SETUP_FIELDS = {
+    "energy_kev": lambda v: float(v),
+    "distance": lambda v: float(v),
+    "center_pixel": lambda v: _as_floats(v, 2),
+    "detector_size": lambda v: _as_floats(v, 2),
+    "pixel_direction": lambda v: tuple(_as_strings(v, 2)),
+    "ub": lambda v: np.asarray(v, dtype=float).reshape(3, 3),
+    "sample_dirs": lambda v: _as_strings(v, 4),
+    "detector_dirs": lambda v: _as_strings(v, 2),
+    "primary_beam": lambda v: _as_floats(v, 3),
+    "inplane": lambda v: _as_floats(v, 3),
+    "surface": lambda v: _as_floats(v, 3),
+}
+
+
+def setup_path(folder) -> Path:
+    """Where the per-folder setup lives."""
+    return Path(folder) / SETUP_FILENAME
+
+
+def read_setup(folder):
+    """The overrides for *folder*, as ``{field: raw value}``. Empty if none.
+
+    Raises ValueError if the file is there but unreadable, so a typo is
+    reported rather than silently ignored.
+    """
+    path = setup_path(folder)
+    if not path.is_file():
+        return {}
+    try:
+        loaded = json.loads(path.read_text())
+    except Exception as exc:
+        raise ValueError(f"{path.name}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError(f"{path.name}: expected an object of field: value")
+    return {k: v for k, v in loaded.items() if k in SETUP_FIELDS}
+
+
+def apply_setup(geometry: HklGeometry, folder=None):
+    """Lay the folder's setup over *geometry*. Returns the fields it changed."""
+    folder = Path(folder) if folder is not None else geometry.image_path.parent
+    values = read_setup(folder)
+    applied = []
+    for name, convert in SETUP_FIELDS.items():
+        if name not in values:
+            continue
+        try:
+            setattr(geometry, name, convert(values[name]))
+        except Exception as exc:
+            raise ValueError(f"{SETUP_FILENAME}: {name}: {exc}") from exc
+        geometry.sources[name] = "setup"
+        applied.append(name)
+    return applied
+
+
+def write_setup(folder, values) -> Path:
+    """Write *values* as the folder's setup, or remove it when empty."""
+    path = setup_path(folder)
+    if not values:
+        path.unlink(missing_ok=True)
+        return path
+    payload = {}
+    for name in SETUP_FIELDS:                 # a stable, readable order
+        if name in values:
+            value = values[name]
+            payload[name] = (
+                np.asarray(value).tolist() if isinstance(value, np.ndarray)
+                else list(value) if isinstance(value, (tuple, list))
+                else value
+            )
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path
+
+
+def setup_differences(geometry: HklGeometry):
+    """What in *geometry* differs from what its files alone say.
+
+    This is what a Save writes: only the values actually changed, so a setup
+    file does not quietly pin everything else as well.
+    """
+    plain = read_geometry(
+        geometry.image_path, geometry.master_path, use_setup=False
+    )
+    changed = {}
+    for name in SETUP_FIELDS:
+        mine, theirs = getattr(geometry, name), getattr(plain, name)
+        if isinstance(mine, np.ndarray) or isinstance(theirs, np.ndarray):
+            same = np.allclose(np.asarray(mine, float), np.asarray(theirs, float))
+        elif isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
+            same = bool(np.isclose(mine, theirs))
+        elif all(isinstance(v, (int, float)) for v in np.atleast_1d(mine).tolist()):
+            same = np.allclose(np.asarray(mine, float), np.asarray(theirs, float))
+        else:
+            same = list(mine) == list(theirs)
+        if not same:
+            changed[name] = mine
+    return changed
+
+
 def read_transmission(image: Path, master: Path | None, n_frames: int,
                       frame_epoch=None):
     """Attenuator transmission for each frame, or None if nothing records it.
@@ -381,7 +503,8 @@ def _fit_frames(values: np.ndarray, n_frames: int) -> np.ndarray:
 
 
 def read_geometry(
-    image: Path, master: Path | None = None, angles_from_master: bool = False
+    image: Path, master: Path | None = None, angles_from_master: bool = False,
+    use_setup: bool = True,
 ) -> HklGeometry:
     """The conversion parameters for *image*, master first where it has them.
 
@@ -438,6 +561,10 @@ def read_geometry(
     # map built from them steps wherever the filter moved. Correct it by
     # default; a scan with one filter throughout is unaffected either way.
     geometry.normalize_transmission = geometry.transmission_varies()
+
+    if use_setup:
+        # Last word: a correction the folder carries beats both files.
+        apply_setup(geometry)
 
     if "angles" not in geometry.sources:
         # Nothing to convert against. Kept openable so the geometry can still
@@ -616,13 +743,37 @@ class ConversionSetupDialog(QtWidgets.QDialog):
         apply_button = QtWidgets.QPushButton("Apply and recompute")
         apply_button.clicked.connect(self._apply)
         reset_button = QtWidgets.QPushButton("Reset to file")
+        reset_button.setToolTip(
+            "Read both HDF5 files again, and the folder's setup on top of them."
+        )
         reset_button.clicked.connect(self._reset)
+        save_button = QtWidgets.QPushButton("Save to folder")
+        save_button.setToolTip(
+            f"Write what you have changed to {SETUP_FILENAME} beside the data.\n"
+            "Every scan in that folder then opens with it -- the viewer, the\n"
+            "gridder and the batch alike. Only the values that differ from the\n"
+            "files are written, so nothing else is pinned by accident."
+        )
+        save_button.clicked.connect(self._save_setup)
+        self.forget_button = QtWidgets.QPushButton("Delete setup")
+        self.forget_button.setToolTip(
+            f"Remove {SETUP_FILENAME} from the folder and go back to the files."
+        )
+        self.forget_button.clicked.connect(self._forget_setup)
         close_button = QtWidgets.QPushButton("Close")
         close_button.clicked.connect(self.hide)
         buttons.addWidget(apply_button)
         buttons.addWidget(reset_button)
+        buttons.addWidget(save_button)
+        buttons.addWidget(self.forget_button)
         buttons.addWidget(close_button)
         outer.addLayout(buttons)
+
+        self.setup_label = QtWidgets.QLabel("")
+        self.setup_label.setWordWrap(True)
+        self.setup_label.setStyleSheet("color: gray;")
+        outer.addWidget(self.setup_label)
+        self._describe_setup()
 
     # -- building ---------------------------------------------------------
 
@@ -837,6 +988,85 @@ class ConversionSetupDialog(QtWidgets.QDialog):
     def _apply(self):
         self.applied.emit()
 
+    def _folder(self) -> Path:
+        return self.geometry_data.image_path.parent
+
+    def _describe_setup(self):
+        """Say whether a setup file is in force, and over what."""
+        path = setup_path(self._folder())
+        if not path.is_file():
+            self.setup_label.setText(
+                f"no {SETUP_FILENAME} in this folder — the files decide everything"
+            )
+            self.forget_button.setEnabled(False)
+            return
+        self.forget_button.setEnabled(True)
+        try:
+            names = sorted(read_setup(self._folder()))
+        except ValueError as exc:
+            self.setup_label.setText(f"{exc} — ignored")
+            return
+        self.setup_label.setText(
+            f"{SETUP_FILENAME} in this folder overrides: " + ", ".join(names)
+            if names else f"{SETUP_FILENAME} is present but overrides nothing"
+        )
+
+    def _save_setup(self):
+        """Write the changed values to the folder, for every scan in it."""
+        try:
+            changed = setup_differences(self.geometry_data)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not compare", f"{type(exc).__name__}: {exc}"
+            )
+            return
+        if not changed:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Nothing to save",
+                "Every value matches what the files already say, so there is "
+                "nothing to override.\n\nChange something first, or use "
+                "Delete setup to remove an existing file.",
+            )
+            return
+        path = setup_path(self._folder())
+        if path.is_file():
+            answer = QtWidgets.QMessageBox.question(
+                self, "Replace the setup?",
+                f"{path} already exists.\n\nReplace it with the "
+                f"{len(changed)} value(s) you have changed?",
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+        try:
+            write_setup(self._folder(), changed)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Could not write", str(exc))
+            return
+        self._describe_setup()
+        QtWidgets.QMessageBox.information(
+            self, "Saved",
+            f"{path}\n\nOverrides: " + ", ".join(sorted(changed)) +
+            "\n\nEvery scan in this folder now opens with these.",
+        )
+
+    def _forget_setup(self):
+        path = setup_path(self._folder())
+        answer = QtWidgets.QMessageBox.question(
+            self, "Delete the setup?",
+            f"Delete {path}?\n\nEvery scan in this folder goes back to what "
+            "its own files say.",
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Could not delete", str(exc))
+            return
+        self._reset()
+        self._describe_setup()
+
     def _reset(self):
         """Back to the values read from the files."""
         fresh = read_geometry(self.geometry_data.image_path, self.geometry_data.master_path)
@@ -848,6 +1078,7 @@ class ConversionSetupDialog(QtWidgets.QDialog):
         ):
             setattr(self.geometry_data, attribute, getattr(fresh, attribute))
         self._scroll.setWidget(self._build_panel())
+        self._describe_setup()
         self.applied.emit()
 
 
