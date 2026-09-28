@@ -63,6 +63,11 @@ IMAGE_DATA_PATH = "entry/data/data"
 FRAME_TIMESTAMP_PATH = "entry/data/frame_timestamp"
 HKL_PATH = "entry/data/metadata/HKL"
 BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
+# Per-frame EPICS readings the consumer stored beside the frames.
+CA_PATH = "entry/data/metadata/ca"
+# The attenuator's transmission, as a fraction of the unattenuated beam.
+IMAGE_TRANSMISSION = "filter_trans"
+MASTER_TRANSMISSION = "filters_transmission"
 
 # The order the beamline turns them in, as stated by the instrument.
 SAMPLE_MOTORS = ("psic_mu", "psic_eta", "psic_chi", "psic_phi")
@@ -112,8 +117,34 @@ class HklGeometry:
     sample_angles: np.ndarray = field(default_factory=lambda: np.zeros((4, 1)))
     detector_angles: np.ndarray = field(default_factory=lambda: np.zeros((2, 1)))
 
+    # Attenuator transmission per frame, when the file records it, and whether
+    # the intensities should be divided by it.
+    transmission: np.ndarray | None = None
+    normalize_transmission: bool = False
+
     sources: dict = field(default_factory=dict)
     frame_epoch: np.ndarray | None = None
+
+    def transmission_varies(self) -> bool:
+        """Whether the attenuator moved during the scan."""
+        if self.transmission is None:
+            return False
+        good = self.transmission[np.isfinite(self.transmission) & (self.transmission > 0)]
+        return good.size > 1 and not np.allclose(good, good[0])
+
+    def frame_scale(self, frame: int) -> float:
+        """What to multiply a frame's counts by to undo the attenuator.
+
+        Frames taken through different filters are not on the same scale, so a
+        map built from them has steps in it wherever the attenuator moved.
+        Dividing by the transmission puts every frame on the unattenuated one.
+        """
+        if not self.normalize_transmission or self.transmission is None:
+            return 1.0
+        if not 0 <= frame < self.transmission.size:
+            return 1.0
+        value = float(self.transmission[frame])
+        return 1.0 / value if np.isfinite(value) and value > 0 else 1.0
 
     def energy_ev(self) -> float:
         return float(self.energy_kev) * 1000.0
@@ -303,6 +334,52 @@ def _read_master_geometry(
         mark["angles"] = "master"
 
 
+def read_transmission(image: Path, master: Path | None, n_frames: int,
+                      frame_epoch=None):
+    """Attenuator transmission for each frame, or None if nothing records it.
+
+    The image file stores one reading per frame, which is what a frame was
+    actually taken through; the master samples at scan points and misses the
+    transients the free-running detector catches, so it is only a fallback.
+    """
+    try:
+        with h5py.File(image, "r") as f:
+            ca = f.get(CA_PATH)
+            if ca is not None and IMAGE_TRANSMISSION in ca:
+                values = np.asarray(ca[IMAGE_TRANSMISSION], dtype=float).ravel()
+                if values.size:
+                    return _fit_frames(values, n_frames), "image"
+    except Exception:
+        pass
+    if master is None:
+        return None, "missing"
+    try:
+        with h5py.File(master, "r") as f:
+            primary = f.get(MASTER_PRIMARY_PATH)
+            if primary is None or MASTER_TRANSMISSION not in primary:
+                return None, "missing"
+            values = np.asarray(primary[MASTER_TRANSMISSION]["value"], dtype=float).ravel()
+            if not values.size:
+                return None, "missing"
+            if frame_epoch is not None and "time" in primary[MASTER_TRANSMISSION]:
+                clock = np.asarray(primary[MASTER_TRANSMISSION]["time"], dtype=float)
+                if clock.size == values.size:
+                    index = nearest_index(np.asarray(frame_epoch, dtype=float), clock)
+                    return values[index], "master"
+            return _fit_frames(values, n_frames), "master"
+    except Exception:
+        return None, "missing"
+
+
+def _fit_frames(values: np.ndarray, n_frames: int) -> np.ndarray:
+    """Size a per-frame column to the frames, padding with the last reading."""
+    if values.size == n_frames:
+        return values
+    if values.size > n_frames:
+        return values[:n_frames]
+    return np.concatenate([values, np.repeat(values[-1], n_frames - values.size)])
+
+
 def read_geometry(
     image: Path, master: Path | None = None, angles_from_master: bool = False
 ) -> HklGeometry:
@@ -351,6 +428,17 @@ def read_geometry(
         except OSError:
             pass
     geometry.frame_epoch = frame_epoch
+
+    transmission, source = read_transmission(
+        image, geometry.master_path, geometry.n_frames, frame_epoch
+    )
+    geometry.transmission = transmission
+    geometry.sources["transmission"] = source
+    # A scan that changed its attenuator has frames on different scales, and a
+    # map built from them steps wherever the filter moved. Correct it by
+    # default; a scan with one filter throughout is unaffected either way.
+    geometry.normalize_transmission = geometry.transmission_varies()
+
     if "angles" not in geometry.sources:
         # Nothing to convert against. Kept openable so the geometry can still
         # be inspected and typed in, but the map itself means nothing.
@@ -450,9 +538,12 @@ def convert(
         for count, frame in enumerate(frames):
             image = np.asarray(stack[frame], dtype=np.float32).reshape(rows, columns)
             total_pixels += image.size
+            # Threshold on the counts as recorded: it is a statement about the
+            # detector, so it must not move when the attenuator does.
             keep = image > threshold
             if not np.any(keep):
                 continue
+            scale = geometry.frame_scale(frame)
             h, k, l = frame_hkl(geometry, hxrd, frame)
             points = np.column_stack(
                 (
@@ -461,7 +552,10 @@ def convert(
                     np.asarray(l, dtype=np.float32)[keep],
                 )
             )
-            chunks.append((points, image[keep]))
+            values = image[keep]
+            if scale != 1.0:
+                values = values * np.float32(scale)
+            chunks.append((points, values))
             kept += points.shape[0]
             if progress is not None and not progress(count + 1, len(frames)):
                 break
@@ -639,6 +733,22 @@ class ConversionSetupDialog(QtWidgets.QDialog):
             "a read-back clock that can sit a whole scan step behind."
         )
         form.addRow(self.master_angles_check)
+
+        self.transmission_check = QtWidgets.QCheckBox("Divide by filter transmission")
+        self.transmission_check.setToolTip(
+            "A scan that changes its attenuator records frames on different\n"
+            "scales, and the map steps wherever the filter moved. Dividing each\n"
+            "frame by its transmission puts them all on the unattenuated beam.\n"
+            "Ticked by default when the transmission actually varies."
+        )
+        self.transmission_check.setChecked(bool(geometry.normalize_transmission))
+        self.transmission_check.toggled.connect(self._transmission_toggled)
+        form.addRow(self.transmission_check)
+        self.transmission_label = QtWidgets.QLabel("")
+        self.transmission_label.setWordWrap(True)
+        self.transmission_label.setStyleSheet("color: gray;")
+        form.addRow("", self.transmission_label)
+        self._describe_transmission()
         layout.addWidget(box)
         layout.addStretch(1)
         return panel
@@ -669,6 +779,31 @@ class ConversionSetupDialog(QtWidgets.QDialog):
             "threshold": self.threshold_spin.value(),
             "max_points": self.max_points_spin.value(),
         }
+
+    def _describe_transmission(self):
+        """Say what the file records, so the checkbox is not a mystery."""
+        values = self.geometry_data.transmission
+        if values is None or not values.size:
+            self.transmission_check.setEnabled(False)
+            self.transmission_label.setText("no transmission recorded in either file")
+            return
+        distinct = np.unique(values[np.isfinite(values) & (values > 0)])
+        where = self.geometry_data.sources.get("transmission", "?")
+        if distinct.size <= 1:
+            only = distinct[0] if distinct.size else float("nan")
+            self.transmission_label.setText(
+                f"constant at {only:.4g} ({where}) — the attenuator did not move,"
+                " so this changes nothing but the scale"
+            )
+        else:
+            self.transmission_label.setText(
+                f"{distinct.size} values from {distinct.min():.3g} to {distinct.max():.3g}"
+                f" ({where}) — a factor of {distinct.max() / distinct.min():,.0f}"
+                " between the weakest and strongest filter"
+            )
+
+    def _transmission_toggled(self, checked):
+        self.geometry_data.normalize_transmission = bool(checked)
 
     def wants_master_angles(self) -> bool:
         return self.master_angles_check.isChecked()

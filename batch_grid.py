@@ -103,7 +103,9 @@ def grid_scans(
     output=None,
     step=None,
     reuse: bool = True,
+    normalize_transmission: bool = True,
     on_start=None,
+    on_geometry=None,
     on_done=None,
     progress=None,
 ):
@@ -111,7 +113,10 @@ def grid_scans(
 
     ``path`` is None for a scan that could not be done, and ``note`` says why.
     The cell size comes from the first scan that reads successfully unless
-    *step* is given outright.
+    *step* is given outright. With *normalize_transmission* each scan's frames
+    are divided by its attenuator transmission where that varies, which is
+    decided per scan -- a series can mix scans that moved their filter with
+    scans that did not.
     """
     folder = Path(folder)
     found = find_scans(folder)
@@ -123,6 +128,7 @@ def grid_scans(
         image = found.get(int(number))
         if on_start is not None:
             on_start(number, image)
+
         if image is None:
             results.append((number, None, "no pva*.h5 with that scan number"))
             if on_done is not None:
@@ -130,6 +136,12 @@ def grid_scans(
             continue
         try:
             geometry = read_geometry(image, master_path_for_image(image))
+            # read_geometry turns this on where the filter moved; switching it
+            # off here is a decision for the whole batch.
+            if not normalize_transmission:
+                geometry.normalize_transmission = False
+            if on_geometry is not None:
+                on_geometry(number, geometry)
             if step is None:
                 # The first scan sets the lattice; everything after it is
                 # measured onto the same one.
@@ -285,6 +297,17 @@ class BatchGridWindow(QtWidgets.QMainWindow):
             "holding about one sample; above 1 is coarser and lighter."
         )
         form.addRow("Cell size ×", self.oversample_spin)
+        self.transmission_check = QtWidgets.QCheckBox(
+            "Divide by filter transmission where it varies"
+        )
+        self.transmission_check.setChecked(True)
+        self.transmission_check.setToolTip(
+            "A scan that changes its attenuator records frames on different\n"
+            "scales. Dividing each frame by its transmission puts them on the\n"
+            "unattenuated beam, so the map does not step where the filter moved.\n"
+            "Scans whose filter never moved are unaffected either way."
+        )
+        form.addRow(self.transmission_check)
         self.reuse_check = QtWidgets.QCheckBox("Skip scans already gridded for this range")
         self.reuse_check.setChecked(True)
         form.addRow(self.reuse_check)
@@ -456,6 +479,17 @@ class BatchGridWindow(QtWidgets.QMainWindow):
                 else f"scan {number}: no file"
             )
 
+        def on_geometry(number, geometry):
+            if geometry.transmission_varies():
+                note = ("corrected" if geometry.normalize_transmission
+                        else "NOT corrected")
+                values = geometry.transmission
+                good = values[np.isfinite(values) & (values > 0)]
+                self._note(
+                    f"    filter moved during this scan "
+                    f"(x{good.max() / good.min():,.0f} range) — {note}"
+                )
+
         def report(number, frame, total):
             self.progress.setFormat(f"scan {number} — frame {frame}/{total}  (%v of %m)")
             QtWidgets.QApplication.processEvents()
@@ -473,7 +507,9 @@ class BatchGridWindow(QtWidgets.QMainWindow):
                 hkl_range=hkl,
                 oversample=self.oversample_spin.value(),
                 reuse=self.reuse_check.isChecked(),
+                normalize_transmission=self.transmission_check.isChecked(),
                 on_start=on_start,
+                on_geometry=on_geometry,
                 on_done=on_done,
                 progress=report,
             )

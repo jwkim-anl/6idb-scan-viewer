@@ -48,6 +48,15 @@ over its footprint instead -- fuzzy gridding, via
 :class:`xrayutilities.FuzzyGridder3D` -- drops that to 3.3% at the same cell
 size, and is several times faster. So the grid is fine *and* continuous.
 
+Attenuator
+----------
+A scan that changes its filter mid-way records frames on different scales, and
+the map steps wherever the attenuator moved -- on one test scan the same angle
+was measured twice, 44 times brighter through one filter than the other.
+Dividing each frame by its transmission puts them all on the unattenuated
+beam, and the two readings then agree to a few percent. This happens by
+default when the transmission varies, and not at all when it does not.
+
 Unmeasured cells
 ----------------
 Most of the bounding box is never visited -- about 23% of cells hold data on
@@ -109,6 +118,10 @@ def geometry_fingerprint(geometry: HklGeometry) -> str:
         np.asarray(geometry.ub, dtype=float).tobytes().hex(),
         np.asarray(geometry.sample_angles, dtype=float).tobytes().hex(),
         np.asarray(geometry.detector_angles, dtype=float).tobytes().hex(),
+        repr(bool(geometry.normalize_transmission)),
+        ""
+        if geometry.transmission is None
+        else np.asarray(geometry.transmission, dtype=float).tobytes().hex(),
     ]
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
@@ -261,6 +274,7 @@ def grid_to_vti(
     reuse: bool = True,
     progress=None,
     geometry: HklGeometry | None = None,
+    normalize_transmission: bool | None = None,
 ) -> Path:
     """Bin *image* onto a regular HKL grid and write it as a ``.vti``.
 
@@ -281,6 +295,8 @@ def grid_to_vti(
 
     if geometry is None:
         geometry = read_geometry(image, Path(master) if master is not None else None)
+    if normalize_transmission is not None:
+        geometry.normalize_transmission = bool(normalize_transmission)
     hxrd = build_converter(geometry)
     low, high = _resolve_range(geometry, hkl_range, hxrd)
     span = np.maximum(high - low, 1e-12)
@@ -316,6 +332,12 @@ def grid_to_vti(
         stack = handle[IMAGE_DATA_PATH]
         for number, frame in enumerate(frames):
             values = np.asarray(stack[frame], dtype=np.float64).reshape(rows, columns)
+            # Frames taken through different filters are not on the same scale;
+            # dividing by the transmission puts them on the unattenuated beam,
+            # so the map does not step where the attenuator moved.
+            scale = geometry.frame_scale(frame)
+            if scale != 1.0:
+                values = values * scale
             hkl = frame_hkl(geometry, hxrd, frame)
             gridder(
                 np.asarray(hkl[0], dtype=np.float64).ravel(),
@@ -371,6 +393,9 @@ def grid_to_vti(
     )
     grid.field_data["geometry"] = np.array([geometry_fingerprint(geometry)])
     grid.field_data["oversample"] = np.array([float(oversample)])
+    grid.field_data["transmission_corrected"] = np.array(
+        [1 if geometry.normalize_transmission else 0]
+    )
     grid.field_data["filled_cells"] = np.array([int(measured.sum()), int(measured.size)])
     grid.save(str(out))
     return out
@@ -453,6 +478,12 @@ def main(argv=None) -> int:
         "--oversample", type=float, default=1.0,
         help="scale the automatic cell size: <1 finer, >1 coarser (default 1)",
     )
+    parser.add_argument(
+        "--no-transmission",
+        action="store_true",
+        help="do not divide intensities by the attenuator transmission "
+             "(it is divided by default on a scan whose filter moved)",
+    )
     parser.add_argument("--max-cells", type=int, default=MAX_CELLS)
     parser.add_argument("--force", action="store_true", help="re-grid even if a cached .vti exists")
     args = parser.parse_args(argv)
@@ -463,6 +494,7 @@ def main(argv=None) -> int:
         hkl_range=tuple(args.range) if args.range else None,
         output=args.output,
         oversample=args.oversample,
+        normalize_transmission=False if args.no_transmission else None,
         max_cells=args.max_cells,
         reuse=not args.force,
         progress=lambda done, total: (
@@ -478,6 +510,8 @@ def main(argv=None) -> int:
     print(f"  dimensions {grid.dimensions}  cell ({spacing})")
     print(f"  fuzzy footprint ({width})")
     print(f"  {filled:,} of {total:,} cells measured ({100 * filled / total:.1f}%)")
+    if int(np.asarray(grid.field_data["transmission_corrected"]).ravel()[0]):
+        print("  intensities divided by the attenuator transmission")
     return 0
 
 

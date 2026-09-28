@@ -209,6 +209,21 @@ came from — `[master]` or `[image]`:
 All of it is editable. **Apply and recompute** rebuilds the map; **Reset to file**
 restores what was read.
 
+**Attenuator.** Some scans change their filter part way through, to hold a strong
+peak and a weak tail in range at once. Those frames are not on the same scale, so the
+map steps wherever the filter moved, and the detector often catches the change: in
+`sio_sao_sto_00007` five angles were measured twice, once through each filter, one
+reading up to **44× brighter** than the other.
+
+**Divide by filter transmission** puts them all on the unattenuated beam, and the
+repeated readings then agree to a few percent. It is ticked automatically when the
+transmission actually varies and left alone when it does not, and the note beside it
+says what the file records — how many filter settings, and the factor between the
+weakest and the strongest. The per-frame value from the image file is used in
+preference to the master's, which samples at scan points and misses the transients
+the free-running detector catches. The threshold is applied to the counts as
+recorded, so it keeps meaning the same thing whatever the attenuator is doing.
+
 **Angles.** By default the per-frame angles stored with each frame in the image
 file are used, *not* the master's. The master records one angle per scan point on a
 read-back clock that lags the exposure; matching those onto frames shifts every
@@ -315,6 +330,16 @@ memory, above 1 lighter. Total cells are capped at 100 M (`--max-cells`), about
 1.6 GB while gridding; past that the cell is coarsened rather than the machine
 swapped.
 
+### Scans that change their attenuator
+
+Frames taken through different filters are divided by their transmission before they
+are binned, so a scan whose attenuator moved does not leave a step in the map. This
+happens by default where the transmission varies and not at all where it does not;
+`--no-transmission` turns it off. Whether it was applied is recorded in the `.vti`,
+and it is part of the cache key, so switching it re-grids rather than handing back
+the other version. See the HKL viewer's **Attenuator** note above for what the
+correction is worth on real data.
+
 ### Unmeasured cells
 
 About a third of the bounding box holds data. The rest was never visited: each frame
@@ -358,6 +383,10 @@ reaches, so each scan keeps its own. This matters more than it sounds: on one te
 set, scan 153's footprint along K was 2.0e-4 where its neighbours' was 1.3e-3,
 because it was a different kind of scan. Forcing the first scan's footprint on it
 would have smeared it about sevenfold.
+
+**Divide by filter transmission where it varies** applies the attenuator correction,
+decided per scan — a series can mix scans that moved their filter with scans that did
+not, and the log says which was which and by what factor.
 
 Re-running skips scans already gridded for the same range (their file is untouched,
 which is how the log tells *reused* from *written*), so an interrupted batch can be
