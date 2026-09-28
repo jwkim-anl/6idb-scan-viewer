@@ -211,6 +211,14 @@ def _resolve_range(geometry, hkl_range, hxrd, sample_frames=8):
     return np.min(lows, axis=0), np.max(highs, axis=0)
 
 
+def measured_range(geometry: HklGeometry, sample_frames: int = 8):
+    """The HKL box the scan actually reaches, as ``(low, high)`` triples.
+
+    Useful for choosing a range to give a whole batch before gridding any of it.
+    """
+    return _resolve_range(geometry, None, build_converter(geometry), sample_frames)
+
+
 def default_output(image: Path, hkl_range=None, oversample: float = 1.0) -> Path:
     """Where the grid for this file, range and detail level is kept."""
     image = Path(image)

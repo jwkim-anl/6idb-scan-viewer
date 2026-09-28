@@ -9,6 +9,7 @@ the pvapy streaming consumer:
 | **`image_viewer.py`** | the detector frames, with ROIs and ROI plots |
 | **`hkl_viewer.py`** | the frames mapped into reciprocal space, in 3D |
 | **`hkl_grid.py`** | bins that map onto a regular HKL grid and saves it as `.vti` |
+| **`batch_grid.py`** | grids a run of scans onto one common lattice |
 | **`vti_viewer.py`** | opens a saved `.vti` on its own, with no beamline data |
 | **`slice_plot.py`** | the slice plane as a flat image, with H/K/L axes |
 
@@ -325,6 +326,55 @@ Those cells are written as `NaN` so analysis can mask them. Anything **drawing**
 grid must replace them first — NaN handed to a GPU volume mapper does not come out
 transparent, it lights the whole empty region up. `hkl_grid.make_drawable()` does
 this, and the viewer calls it on load.
+
+---
+
+## `batch_grid.py` — a run of scans, gridded the same way
+
+One scan at a time is fine for looking; comparing a series means gridding them all
+identically. Point it at a folder of `pva*.h5` files, give it scan numbers and an HKL
+range, and it writes one `.vti` per scan into an `output` folder beside them.
+
+```bash
+python batch_grid.py                 # opens empty
+python batch_grid.py /data/beamtime  # opens on that folder
+```
+
+**Scan numbers** can be typed (`152, 154 157-160`) or filled from **first / last /
+every n**. Numbers with no matching file are listed and skipped rather than stopping
+the run. **From the first scan** fills the HKL box with the extent that scan reaches,
+as a starting point.
+
+### One lattice for the whole set
+
+**The cell size is measured once, from the first scan in the list, and reused for
+every scan after it.** With the same HKL range as well, every grid comes out with the
+same origin, spacing and shape, so they can be subtracted, stacked or stepped through
+cell for cell. Measuring each scan separately would give each its own lattice and
+quietly make them incomparable — which is the whole point of the batch.
+
+The **fuzzy footprint is not shared**. It describes how far one sample of *that* scan
+reaches, so each scan keeps its own. This matters more than it sounds: on one test
+set, scan 153's footprint along K was 2.0e-4 where its neighbours' was 1.3e-3,
+because it was a different kind of scan. Forcing the first scan's footprint on it
+would have smeared it about sevenfold.
+
+Re-running skips scans already gridded for the same range (their file is untouched,
+which is how the log tells *reused* from *written*), so an interrupted batch can be
+resumed by running it again. **Stop** finishes the current frame and leaves no
+half-written file.
+
+From a script, without the window:
+
+```python
+from batch_grid import expand_scans, grid_scans
+
+grid_scans("/data/beamtime", expand_scans(152, 160, 2),
+           hkl_range=(0.93, 1.11, -0.60, -0.36, 7.39, 7.66))
+```
+
+`expand_scans(first, last, every)` is the same numbering the **Fill list** button
+uses, and `parse_scans("152, 154 157-160")` reads the typed form.
 
 ---
 

@@ -14,6 +14,8 @@
 #                    -> xrayutilities, pyvista, pyvistaqt, vtk
 #   hkl_grid.py      bins that map onto a regular grid, saved as .vti
 #                    -> xrayutilities, pyvista
+#   batch_grid.py    grids a run of scans onto one common lattice
+#                    -> same as hkl_grid.py
 #   vti_viewer.py    opens a saved .vti on its own
 #                    -> pyvista, pyvistaqt, vtk  (no xrayutilities, no h5py)
 #   slice_plot.py    the slice plane as a flat image with H/K/L axes
