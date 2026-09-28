@@ -755,21 +755,47 @@ class ConversionSetupDialog(QtWidgets.QDialog):
 
     # -- applying ---------------------------------------------------------
 
+    @staticmethod
+    def _typed(spin, current):
+        """The widget's value, unless it is only a rounded view of *current*.
+
+        A spin box shows a fixed number of decimals, so reading every box back
+        into the geometry would quantise whatever the files hold -- the UB comes
+        out of the master with more digits than six. Taking the widget's number
+        only when it differs from the rounded form of what is already there
+        leaves untouched values at full precision, and still picks up an edit
+        of a single digit.
+        """
+        current = float(current)
+        return current if spin.value() == round(current, spin.decimals()) else spin.value()
+
     def apply_to_geometry(self):
         geometry = self.geometry_data
-        geometry.energy_kev = self.energy_spin.value()
-        geometry.distance = self.distance_spin.value()
-        geometry.center_pixel = (self.cch1_spin.value(), self.cch2_spin.value())
-        geometry.detector_size = (self.size1_spin.value(), self.size2_spin.value())
+        take = self._typed
+        geometry.energy_kev = take(self.energy_spin, geometry.energy_kev)
+        geometry.distance = take(self.distance_spin, geometry.distance)
+        geometry.center_pixel = (
+            take(self.cch1_spin, geometry.center_pixel[0]),
+            take(self.cch2_spin, geometry.center_pixel[1]),
+        )
+        geometry.detector_size = (
+            take(self.size1_spin, geometry.detector_size[0]),
+            take(self.size2_spin, geometry.detector_size[1]),
+        )
         geometry.pixel_direction = (
             self.pdir1_combo.currentText(),
             self.pdir2_combo.currentText(),
         )
-        geometry.ub = np.array([s.value() for s in self.ub_spins]).reshape(3, 3)
+        geometry.ub = np.array(
+            [take(spin, geometry.ub.ravel()[index])
+             for index, spin in enumerate(self.ub_spins)]
+        ).reshape(3, 3)
         geometry.sample_dirs = [c.currentText() for c in self.sample_combos]
         geometry.detector_dirs = [c.currentText() for c in self.detector_combos]
         for attribute, spins in self.vector_spins.items():
-            setattr(geometry, attribute, tuple(s.value() for s in spins))
+            current = getattr(geometry, attribute)
+            setattr(geometry, attribute,
+                    tuple(take(spin, current[index]) for index, spin in enumerate(spins)))
 
     def conversion_arguments(self) -> dict:
         return {
