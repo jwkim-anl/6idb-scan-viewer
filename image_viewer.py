@@ -237,9 +237,14 @@ def _scan_point_count(group) -> int | None:
         item = group[name]
         if not isinstance(item, h5py.Group) or "value" not in item:
             continue
+        values = item["value"]
+        if not isinstance(values, h5py.Dataset):
+            continue
         try:
-            size = int(np.asarray(item["value"]).size)
-        except (TypeError, ValueError):
+            # The length is in the shape; reading the array itself would pull
+            # every field of the stream off disk only to measure it.
+            size = int(values.size)
+        except (AttributeError, TypeError, ValueError):
             continue
         if size > 1:
             counts[size] = counts.get(size, 0) + 1
