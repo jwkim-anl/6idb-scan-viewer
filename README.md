@@ -114,6 +114,16 @@ plot against absolute time.
 
 ### The plot
 
+Above it, when the master records them, sit the diffractometer's own
+**psic_h/k/l averaged over the scan** — where the scan was pointing in reciprocal
+space, without opening the HKL viewer. A **± spread** is shown for any axis that
+moved, because on a rocking curve one of the three sweeps across the peak and a bare
+mean would read like a fixed position. With several scans selected each gets a line
+prefixed by its scan number; scans whose master predates these fields say so rather
+than showing nothing. Older masters here do not record them — of the files to hand,
+only scan 151 onward do.
+
+
 Curves for each Y field, overlaid across every selected file, with peak statistics
 below (max, min, half-max centre and FWHM). **Show dY/dX** overlays each curve's
 derivative on a second axis. Zoom with the toolbar's rectangle tool; the mouse

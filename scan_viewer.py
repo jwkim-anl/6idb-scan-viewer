@@ -227,7 +227,60 @@ def _yaml_items(text: str) -> list[str]:
 
 # Reading this opens the file, and the browser re-reads the whole selection on
 # every selection change, so remember it per (path, mtime, size).
+# The diffractometer's own reading of where it was pointing, per scan point.
+# Older scans do not record it.
+PSIC_HKL_FIELDS = ("psic_h", "psic_k", "psic_l")
+
+_SCAN_HKL_CACHE: dict[tuple, tuple | None] = {}
 _SCAN_INFO_CACHE: dict[tuple, dict] = {}
+
+
+def scan_hkl(path: Path):
+    """Mean and spread of psic_h/k/l over the scan, or None if not recorded.
+
+    The spread matters as much as the mean: on a rocking curve one of the three
+    sweeps across the peak while the others hold still, and a bare average
+    would read like a fixed position.
+    """
+    path = Path(path)
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_mtime, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None and key in _SCAN_HKL_CACHE:
+        return _SCAN_HKL_CACHE[key]
+
+    result = None
+    if set(PSIC_HKL_FIELDS) <= set(stream_fields(path, "primary")):
+        try:
+            data = read_primary(path, list(PSIC_HKL_FIELDS))
+        except OSError:
+            data = {}
+        gathered = []
+        for name in PSIC_HKL_FIELDS:
+            values = np.asarray(data.get(name, ()), dtype=float).ravel()
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                gathered = []
+                break
+            gathered.append((float(values.mean()), float(values.std())))
+        result = tuple(gathered) if gathered else None
+    if key is not None:
+        _SCAN_HKL_CACHE[key] = result
+    return result
+
+
+def format_scan_hkl(values, decimals: int = 4) -> str:
+    """``H 1.0135  K -0.4926 ± 0.0386  L 7.4840`` for one scan."""
+    smallest = 0.5 * 10.0 ** (-decimals)
+    parts = []
+    for name, (mean, spread) in zip("HKL", values):
+        text = f"{name} {mean:.{decimals}f}"
+        if spread >= smallest:
+            text += f" ± {spread:.{decimals}f}"
+        parts.append(text)
+    return "   ".join(parts)
 
 
 def read_scan_info(path: Path) -> dict:
@@ -714,6 +767,17 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.file_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         layout.addWidget(self.file_label)
 
+        self.hkl_label = QtWidgets.QLabel("")
+        self.hkl_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self.hkl_label.setWordWrap(True)
+        self.hkl_label.setStyleSheet("color: gray;")
+        self.hkl_label.setToolTip(
+            "The diffractometer's own psic_h/k/l, averaged over the scan.\n"
+            "A spread is shown for any axis that moved -- on a rocking curve\n"
+            "one of the three sweeps while the others hold still."
+        )
+        layout.addWidget(self.hkl_label)
+
         axis_row = QtWidgets.QHBoxLayout()
         self.axis_label = QtWidgets.QLabel("")
         axis_row.addWidget(self.axis_label, 1)
@@ -911,6 +975,7 @@ class HdfViewer(QtWidgets.QMainWindow):
     def _on_selection_changed(self):
         paths = self._selected_paths()
         self._update_file_label(paths)
+        self._update_hkl_label(paths)
         self._update_image_button(paths)
         if not paths:
             self._fields = []
@@ -1054,6 +1119,27 @@ class HdfViewer(QtWidgets.QMainWindow):
             finally:
                 self._syncing_fields = False
         self._update_plot()
+
+    def _update_hkl_label(self, paths: list[Path]):
+        """Where the diffractometer was, averaged over each selected scan."""
+        lines = []
+        missing = 0
+        for path in paths:
+            values = scan_hkl(path)
+            if values is None:
+                missing += 1
+                continue
+            text = format_scan_hkl(values)
+            lines.append(text if len(paths) == 1 else f"{scan_number(path)}:  {text}")
+        if not lines:
+            # Silent when nothing records it, rather than a standing complaint.
+            self.hkl_label.setText(
+                "" if not paths else "psic_h/k/l not recorded in this scan"
+            )
+            return
+        if missing:
+            lines.append(f"({missing} more without psic_h/k/l)")
+        self.hkl_label.setText("        ".join(lines))
 
     def _update_file_label(self, paths: list[Path]):
         """Name the selected file(s) above the plot, by their leading part.
