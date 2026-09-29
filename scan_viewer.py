@@ -63,10 +63,10 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pyqtgraph as pg
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
-from matplotlib.transforms import Bbox
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
@@ -79,6 +79,20 @@ METADATA_PATH = "entry/instrument/bluesky/metadata"
 # (seconds past the UNIX epoch, one per scan point), so absolute time can be an
 # axis like anything else.
 EPOCH_FIELD = "EPOCH"
+
+# Curves are drawn with pyqtgraph, which defaults to a black canvas; the rest
+# of this window is light, and so is the matplotlib grid plot beside it.
+pg.setConfigOption("background", "w")
+pg.setConfigOption("foreground", "k")
+pg.setConfigOptions(antialias=True)
+
+# Enough distinct colours that a handful of files times a handful of fields
+# stay tellable apart, in a fixed order so a curve keeps its colour across a
+# redraw.
+CURVE_COLORS = (
+    "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
+    "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
+)
 BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
 HDF_SUFFIXES = (".hdf", ".h5", ".hdf5")
 FILE_COLUMNS = ["Scan", "Img", "Plan", "Motor", "Range", "Pts", "Count [s]"]
@@ -799,14 +813,35 @@ class HdfViewer(QtWidgets.QMainWindow):
         layout.addLayout(axis_row)
 
         canvas_box = QtWidgets.QVBoxLayout()
+
+        # Curves are pyqtgraph, the colour map stays matplotlib: one gives the
+        # interaction, the other the colour bar and the print-quality output.
+        # They take turns in a stack rather than fighting over the space.
+        self.plot_stack = QtWidgets.QStackedWidget()
+        self.curve_plot = pg.PlotWidget()
+        self.curve_item = self.curve_plot.getPlotItem()
+        self.curve_item.showGrid(x=True, y=True, alpha=0.3)
+        self.curve_item.addLegend(offset=(-10, 10), labelTextSize="8pt")
+        self.curve_vb = self.curve_item.getViewBox()
+
+        # dY/dX shares the X axis but needs its own Y scale, so it gets a
+        # second view box hung off the right axis. Linking the X and keeping
+        # the geometry in step is all that ties them together -- unlike a
+        # matplotlib twin axis, neither one can drag the other's range about.
+        self.deriv_vb = pg.ViewBox()
+        self.curve_item.showAxis("right")
+        self.curve_item.scene().addItem(self.deriv_vb)
+        self.curve_item.getAxis("right").linkToView(self.deriv_vb)
+        self.deriv_vb.setXLink(self.curve_item)
+        self.curve_vb.sigResized.connect(self._sync_derivative_view)
+        self.plot_stack.addWidget(self.curve_plot)
+
         self.figure = Figure(figsize=(6, 4))
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.ax = self.figure.add_subplot(111)
-        # Shares the X axis with self.ax so the derivative overlay (dY/dX,
-        # generally a very different scale from Y) gets its own Y scale.
-        self.ax2 = self.ax.twinx()
         # Kept so the grid's own readout can be swapped in and out.
         self._default_format_coord = self.ax.format_coord
+        self._derivative_items: list = []
         # Gives the standard matplotlib "zoom to rectangle" (drag to zoom),
         # pan, and home/back/forward view-history controls.
         self.toolbar = NavigationToolbar2QT(self.canvas, panel)
@@ -822,12 +857,24 @@ class HdfViewer(QtWidgets.QMainWindow):
             self.toolbar.locLabel.hide()
         self.toolbar.set_message = self.coord_label.setText
 
-        toolbar_row = QtWidgets.QHBoxLayout()
-        toolbar_row.setContentsMargins(0, 0, 0, 0)
-        toolbar_row.addWidget(self.toolbar)
-        toolbar_row.addWidget(self.coord_label, 1)
-        canvas_box.addLayout(toolbar_row)
-        canvas_box.addWidget(self.canvas, 1)
+        # The matplotlib toolbar belongs to the colour map, so it travels with
+        # it; the curve plot has pyqtgraph's own wheel-zoom, drag-pan and
+        # right-click menu instead.
+        grid_page = QtWidgets.QWidget()
+        grid_box = QtWidgets.QVBoxLayout(grid_page)
+        grid_box.setContentsMargins(0, 0, 0, 0)
+        grid_box.addWidget(self.toolbar)
+        grid_box.addWidget(self.canvas, 1)
+        self.plot_stack.addWidget(grid_page)
+
+        canvas_box.addWidget(self.plot_stack, 1)
+        canvas_box.addWidget(self.coord_label)
+
+        # Both plots report the pointer to the same label.
+        self._curve_mouse_proxy = pg.SignalProxy(
+            self.curve_item.scene().sigMouseMoved, rateLimit=60,
+            slot=self._on_curve_mouse_moved,
+        )
         canvas_widget = QtWidgets.QWidget()
         canvas_widget.setLayout(canvas_box)
         layout.addWidget(canvas_widget, 1)
@@ -1278,11 +1325,20 @@ class HdfViewer(QtWidgets.QMainWindow):
             and mode == self._last_mode
         )
         prev_xlim = prev_ylim = None
-        if same_view and self.ax.lines:
-            if not self.ax.get_autoscalex_on():
-                prev_xlim = self.ax.get_xlim()
-            if not self.ax.get_autoscaley_on():
-                prev_ylim = self.ax.get_ylim()
+        if same_view:
+            if mode == "grid" and self.ax.lines or (mode == "grid" and self.ax.collections):
+                if not self.ax.get_autoscalex_on():
+                    prev_xlim = self.ax.get_xlim()
+                if not self.ax.get_autoscaley_on():
+                    prev_ylim = self.ax.get_ylim()
+            elif mode == "curves" and self.curve_item.listDataItems():
+                # pyqtgraph turns auto-range off for an axis the moment the
+                # user zooms or pans it, which is the same signal matplotlib's
+                # autoscale flag gives.
+                auto_x, auto_y = self.curve_vb.autoRangeEnabled()
+                x_range, y_range = self.curve_vb.viewRange()
+                prev_xlim = None if auto_x else tuple(x_range)
+                prev_ylim = None if auto_y else tuple(y_range)
         self._last_paths = path_key
         self._last_x_field = x_field
         self._last_monitor_field = monitor_field
@@ -1293,31 +1349,27 @@ class HdfViewer(QtWidgets.QMainWindow):
             self._colorbar.remove()
             self._colorbar = None
         self.ax.clear()
-        self.ax2.clear()
         self.ax.format_coord = self._default_format_coord
-        # self.ax2 shares the X axis with self.ax (twinx). matplotlib unions
-        # dataLim across every axes in that shared group when autoscaling --
-        # regardless of each one's own autoscale-on flag -- and clear() does
-        # NOT reset dataLim (it's left stale until new data replaces it), so
-        # self.ax2's last (e.g. derivative-off, file-A) data silently
-        # polluted self.ax's autoscaled range for the next file. Forcing it
-        # back to an empty bbox is what actually excludes it from that
-        # union; self.ax2 only ever gets its X range explicitly afterward.
-        self.ax2.dataLim = Bbox.null()
-        self.ax2.set_autoscalex_on(False)
+        self._clear_curves()
         if not paths or not x_field or not y_fields:
-            self.ax.set_title("Select file(s), an X field and at least one Y field.")
-            self.ax2.set_visible(False)
-            self.canvas.draw_idle()
+            self.plot_stack.setCurrentIndex(0)
+            self.curve_item.setTitle(
+                "Select file(s), an X field and at least one Y field."
+            )
             self.stats_table.setRowCount(0)
             return
 
         if grid is not None:
+            if self.plot_stack.currentIndex() != 1:
+                self.coord_label.setText("")   # the curve plot's last readout
+            self.plot_stack.setCurrentIndex(1)
             self._plot_grid(paths, grid, y_fields[0], monitor_field, prev_xlim, prev_ylim)
             return
+        if self.plot_stack.currentIndex() != 0:
+            self.coord_label.setText("")       # the colour map's last readout
+        self.plot_stack.setCurrentIndex(0)
 
         overlay = len(paths) > 1
-        n_lines = 0
         stats_rows: list[tuple[str, dict[str, float | None]]] = []
         curves: list[tuple[str, np.ndarray, np.ndarray]] = []
         for path in paths:
@@ -1345,72 +1397,103 @@ class HdfViewer(QtWidgets.QMainWindow):
                     with np.errstate(divide="ignore", invalid="ignore"):
                         y = np.where(monitor != 0, y / monitor, np.nan)
                 label = f"{path.name}: {y_field}" if overlay else y_field
-                self.ax.plot(x, y, marker="o", markersize=3, linewidth=1, label=label)
-                n_lines += 1
                 stats_rows.append((label, curve_stats(x, y)))
                 curves.append((label, x, y))
 
-        self.ax.set_xlabel(x_field)
+        for index, (label, x, y) in enumerate(curves):
+            color = CURVE_COLORS[index % len(CURVE_COLORS)]
+            self.curve_item.plot(
+                x, y, name=label,
+                pen=pg.mkPen(color, width=1),
+                symbol="o", symbolSize=4,
+                symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color),
+                # A normalised curve can divide by a zero monitor; break the
+                # line at those rather than drawing through them.
+                connect="finite",
+            )
+
+        self.curve_item.setTitle(None)
+        self.curve_item.setLabel("bottom", x_field)
         ylabel = ", ".join(y_fields)
         if normalize:
             ylabel += f" / {monitor_field}"
-        self.ax.set_ylabel(ylabel)
-        self.ax.grid(True, alpha=0.3)
-
-        # Resolve self.ax's autoscaled view now instead of leaving it to the
-        # deferred draw-time autoscale: self.ax2 shares the X axis (twinx)
-        # and, left to its own autoscale-on-draw, can win the shared-axis
-        # update with its own (possibly stale/empty) data limits -- that was
-        # the cause of the X range getting stuck on the derivative's old
-        # range after toggling dY/dX off and then selecting a new file.
-        self.ax.relim()
-        self.ax.autoscale_view()
+        self.curve_item.setLabel("left", ylabel)
 
         show_derivative = self.derivative_btn.isChecked()
-        self.ax2.set_visible(show_derivative)
+        self.curve_item.getAxis("right").setStyle(showValues=show_derivative)
+        self.curve_item.getAxis("right").setLabel(
+            f"d/d{x_field}" if show_derivative else None
+        )
         if show_derivative:
-            for label, x, y in curves:
+            for index, (label, x, y) in enumerate(curves):
                 if x.size < 2:
                     continue
                 with np.errstate(divide="ignore", invalid="ignore"):
                     dy_dx = np.gradient(y, x)
                 finite = np.isfinite(dy_dx)
-                self.ax2.plot(
-                    x[finite],
-                    dy_dx[finite],
-                    linestyle="--",
-                    linewidth=1,
-                    label=f"d({label})/dx",
+                color = CURVE_COLORS[index % len(CURVE_COLORS)]
+                item = pg.PlotDataItem(
+                    x[finite], dy_dx[finite],
+                    pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine),
                 )
-            self.ax2.set_ylabel(f"d/d{x_field}")
+                self.deriv_vb.addItem(item)
+                self._derivative_items.append(item)
+            self.deriv_vb.enableAutoRange(axis=pg.ViewBox.YAxis)
+        self._sync_derivative_view()
 
-        handles, labels = self.ax.get_legend_handles_labels()
-        if show_derivative:
-            h2, l2 = self.ax2.get_legend_handles_labels()
-            handles, labels = handles + h2, labels + l2
-        if handles:
-            self.ax.legend(handles, labels, fontsize=8, loc="best")
-        if prev_xlim is not None:
-            self.ax.set_xlim(prev_xlim)
-        if prev_ylim is not None:
-            self.ax.set_ylim(prev_ylim)
-
-        # self.ax2's X autoscale is off (set above); give it self.ax's final
-        # range explicitly. Only its Y axis (the derivative's own scale)
-        # stays autoscaled. emit=False keeps this from propagating back over
-        # the shared X axis to self.ax, which would clear self.ax's
-        # autoscale-X flag on every redraw -- the flag is how the next redraw
-        # tells a real user zoom from a plain autoscaled view.
-        self.ax2.set_xlim(self.ax.get_xlim(), emit=False)
-
-        self.figure.tight_layout()
-        self.canvas.draw_idle()
+        # Auto-range unless the user had zoomed this same view, in which case
+        # the range they chose is put back.
+        if prev_xlim is None and prev_ylim is None:
+            self.curve_vb.enableAutoRange()
+        else:
+            if prev_xlim is None:
+                self.curve_vb.enableAutoRange(axis=pg.ViewBox.XAxis)
+            else:
+                self.curve_vb.setXRange(*prev_xlim, padding=0)
+            if prev_ylim is None:
+                self.curve_vb.enableAutoRange(axis=pg.ViewBox.YAxis)
+            else:
+                self.curve_vb.setYRange(*prev_ylim, padding=0)
+        # Enabling auto-range only queues the recompute, so the view still
+        # reads as the old one until Qt gets round to it. Resolve it here, so
+        # a redraw leaves the range it is going to settle on.
+        self.curve_vb.updateAutoRange()
 
         self._update_stats_table(stats_rows)
 
+    def _sync_derivative_view(self):
+        """Keep the derivative's view box on top of the main one."""
+        self.deriv_vb.setGeometry(self.curve_vb.sceneBoundingRect())
+        self.deriv_vb.linkedViewChanged(self.curve_vb, self.deriv_vb.XAxis)
+
+    def _clear_curves(self):
+        """Empty the curve page, legend and derivative overlay alike."""
+        self.curve_item.clear()
+        for item in self._derivative_items:
+            self.deriv_vb.removeItem(item)
+        self._derivative_items = []
+        legend = self.curve_item.legend
+        if legend is not None:
+            legend.clear()
+        self.curve_item.setTitle(None)
+
+    def _on_curve_mouse_moved(self, event):
+        """Report the pointer, the way the matplotlib readout does."""
+        if self.plot_stack.currentIndex() != 0:
+            return
+        pos = event[0]
+        if not self.curve_item.sceneBoundingRect().contains(pos):
+            self.coord_label.setText("")
+            return
+        point = self.curve_vb.mapSceneToView(pos)
+        text = f"{self._x_field() or 'x'}={point.x():.6g}   y={point.y():.6g}"
+        if self.derivative_btn.isChecked() and self._derivative_items:
+            other = self.deriv_vb.mapSceneToView(pos)
+            text += f"   d/dx={other.y():.6g}"
+        self.coord_label.setText(text)
+
     def _plot_grid(self, paths, grid, value_field, monitor_field, prev_xlim, prev_ylim):
         """Draw a two-motor raster as a colour map with a scale bar."""
-        self.ax2.set_visible(False)
         label = value_field + (f" / {monitor_field}" if monitor_field else "")
 
         x_edges, y_edges = axis_edges(grid["x"]), axis_edges(grid["y"])
@@ -1429,21 +1512,16 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.ax.grid(False)
 
         # Autoscale cannot be relied on here: pcolormesh adds a *collection*,
-        # which relim() does not look at, and the twin axes sharing this X
-        # suppresses the draw-time rescale -- between them the X range was
-        # left at the empty default while Y came out right. Set both ends
-        # from the cell edges instead.
+        # which relim() does not look at, so the X range was left at the empty
+        # default while Y came out right. Set both ends from the cell edges.
         self.ax.set_xlim(x_edges[0], x_edges[-1])
         self.ax.set_ylim(y_edges[0], y_edges[-1])
         if prev_xlim is not None:
             self.ax.set_xlim(prev_xlim)
         if prev_ylim is not None:
             self.ax.set_ylim(prev_ylim)
-        self.ax2.set_xlim(self.ax.get_xlim(), emit=False)
-
-        # Report the value under the pointer too. The stock readout gives only
-        # x and y (and, because of the twin axes, a second bare coordinate
-        # pair), so replace it outright rather than append to it.
+        # Report the value under the pointer too. The stock readout gives
+        # only x and y, so replace it outright rather than append to it.
         def format_coord(x, y):
             parts = [f"{grid['x_name']}={x:.6g}", f"{grid['y_name']}={y:.6g}"]
             column = int(np.searchsorted(x_edges, x) - 1)
