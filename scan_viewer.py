@@ -79,6 +79,10 @@ METADATA_PATH = "entry/instrument/bluesky/metadata"
 # (seconds past the UNIX epoch, one per scan point), so absolute time can be an
 # axis like anything else.
 EPOCH_FIELD = "EPOCH"
+# A plain 0, 1, 2 ... down the scan. A count plan moves nothing, so it has no
+# motor to plot against and the fallback would otherwise settle on whichever
+# motor happens to sort last -- a flat line at wherever it was parked.
+INDEX_FIELD = "INDEX"
 
 # Curves are drawn with pyqtgraph, which defaults to a black canvas; the rest
 # of this window is light, and so is the matplotlib grid plot beside it.
@@ -89,6 +93,24 @@ pg.setConfigOptions(antialias=True)
 # Enough distinct colours that a handful of files times a handful of fields
 # stay tellable apart, in a fixed order so a curve keeps its colour across a
 # redraw.
+# pyqtgraph puts a grid line at every tick of every level, three deep, which
+# inks about 15% of the plot and reads as a mesh. Two levels halves the lines
+# and a lighter alpha softens what is left.
+GRID_ALPHA = 0.12
+GRID_LEVELS = 2
+
+class SparseAxis(pg.AxisItem):
+    """An axis offering only the coarser tick levels.
+
+    The grid is drawn from the ticks, so trimming the finest level is what
+    actually thins it; alpha alone only makes the same mesh fainter. Labels
+    come from the top two levels, so they are unaffected.
+    """
+
+    def tickValues(self, minVal, maxVal, size):
+        return super().tickValues(minVal, maxVal, size)[:GRID_LEVELS]
+
+
 CURVE_COLORS = (
     "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
     "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
@@ -138,6 +160,10 @@ def stream_fields(path: Path, stream: str) -> list[str]:
             ]
             if _epoch_source(group) is not None:
                 names.append(EPOCH_FIELD)
+            if names:
+                # Last, so default_x_field reaches for it before any parked
+                # motor when the scan itself names none.
+                names.append(INDEX_FIELD)
             return names
     except OSError:
         return []
@@ -504,6 +530,32 @@ def grid_stats(grid: dict) -> dict[str, float | None]:
     return stats
 
 
+def _primary_point_count(group) -> int | None:
+    """How many points the stream has: the most common length among its fields.
+
+    Read off each dataset's shape rather than its contents, and by majority
+    because a few fields (read-once presets and the like) are a different
+    length from the scan.
+    """
+    counts: dict[int, int] = {}
+    for name in group.keys():
+        item = group[name]
+        if not isinstance(item, h5py.Group) or "value" not in item:
+            continue
+        values = item["value"]
+        if not isinstance(values, h5py.Dataset):
+            continue
+        try:
+            size = int(values.size)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if size >= 1:
+            counts[size] = counts.get(size, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
 def read_primary(path: Path, fields: list[str]) -> dict[str, np.ndarray]:
     """Read the ``value`` array of each of *fields* from the primary stream."""
     out: dict[str, np.ndarray] = {}
@@ -513,6 +565,11 @@ def read_primary(path: Path, fields: list[str]) -> dict[str, np.ndarray]:
             return out
         epoch_source = _epoch_source(group)
         for name in fields:
+            if name == INDEX_FIELD:
+                count = _primary_point_count(group)
+                if count:
+                    out[name] = np.arange(count, dtype=float)
+                continue
             if name == EPOCH_FIELD:
                 if epoch_source is not None:
                     out[name] = np.asarray(
@@ -818,9 +875,12 @@ class HdfViewer(QtWidgets.QMainWindow):
         # interaction, the other the colour bar and the print-quality output.
         # They take turns in a stack rather than fighting over the space.
         self.plot_stack = QtWidgets.QStackedWidget()
-        self.curve_plot = pg.PlotWidget()
+        self.curve_plot = pg.PlotWidget(axisItems={
+            "bottom": SparseAxis(orientation="bottom"),
+            "left": SparseAxis(orientation="left"),
+        })
         self.curve_item = self.curve_plot.getPlotItem()
-        self.curve_item.showGrid(x=True, y=True, alpha=0.3)
+        self.curve_item.showGrid(x=True, y=True, alpha=GRID_ALPHA)
         self.curve_item.addLegend(offset=(-10, 10), labelTextSize="8pt")
         self.curve_vb = self.curve_item.getViewBox()
 
