@@ -211,36 +211,89 @@ def nearest_index(frame_epoch: np.ndarray, scan_epoch: np.ndarray) -> np.ndarray
     return np.where(take_left, left, right)
 
 
-def read_scan_channels(image: Path, frame_epoch) -> dict[str, np.ndarray]:
+def _evenly_spaced_index(n_frames: int, n_scan_points: int) -> np.ndarray:
+    """Map each frame onto a scan point by position, not by time.
+
+    Used only when the image file has no per-frame timestamp to match against
+    (see ``read_scan_channels``), so frame 0 takes scan point 0, the last frame
+    takes the last scan point, and the rest are spread evenly in between.
+    """
+    if n_frames <= 1:
+        return np.zeros(max(n_frames, 0), dtype=int)
+    positions = np.arange(n_frames) * (n_scan_points - 1) / (n_frames - 1)
+    return np.round(positions).astype(int)
+
+
+def _scan_point_count(group) -> int | None:
+    """How many points the master's primary stream has.
+
+    Used in place of ``_scan_time_base`` when there is no frame timestamp to
+    read a count off of a real clock: the most common length among the
+    stream's own value arrays, since a few fields (e.g. read-once presets) can
+    be shorter or longer than the scan itself.
+    """
+    counts: dict[int, int] = {}
+    for name in group.keys():
+        item = group[name]
+        if not isinstance(item, h5py.Group) or "value" not in item:
+            continue
+        try:
+            size = int(np.asarray(item["value"]).size)
+        except (TypeError, ValueError):
+            continue
+        if size > 1:
+            counts[size] = counts.get(size, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
+def read_scan_channels(
+    image: Path, frame_epoch, n_frames: int | None = None
+) -> dict[str, np.ndarray]:
     """The master file's primary fields, resampled onto the image's frames.
 
     The detector free-runs, so the two files rarely have the same number of
     points -- 103 frames against 101 scan points is typical, the camera starting
     a moment early. Each frame therefore takes the value of the scan point
     nearest it in time; frames outside the scan hold the first or last point.
+
+    When the image file carries no per-frame timestamp at all, there is no
+    clock to match against, so frames are instead spread evenly across the
+    master's scan points by position (see ``_evenly_spaced_index``) -- a
+    rougher alignment, but the best available without a time base.
     """
-    if frame_epoch is None or len(frame_epoch) == 0:
+    have_epoch = frame_epoch is not None and len(frame_epoch) > 0
+    if not have_epoch and not n_frames:
         return {}
     master = master_path_for_image(image)
     if master is None:
         return {}
-    frame_epoch = np.asarray(frame_epoch, dtype=float)
     try:
         with h5py.File(master, "r") as f:
             group = f.get(MASTER_PRIMARY_PATH)
             if group is None:
                 return {}
-            scan_epoch = _scan_time_base(group)
-            if scan_epoch is None:
-                return {}
-            index = nearest_index(frame_epoch, scan_epoch)
 
-            # Refuse to pair files that do not describe the same stretch of
-            # time -- a mismatched master would otherwise be resampled into
-            # plausible-looking nonsense.
-            spacing = float(np.median(np.diff(scan_epoch))) or 1.0
-            if float(np.median(np.abs(frame_epoch - scan_epoch[index]))) > 5 * spacing:
-                return {}
+            if have_epoch:
+                frame_epoch = np.asarray(frame_epoch, dtype=float)
+                scan_epoch = _scan_time_base(group)
+                if scan_epoch is None:
+                    return {}
+                index = nearest_index(frame_epoch, scan_epoch)
+
+                # Refuse to pair files that do not describe the same stretch
+                # of time -- a mismatched master would otherwise be resampled
+                # into plausible-looking nonsense.
+                spacing = float(np.median(np.diff(scan_epoch))) or 1.0
+                if float(np.median(np.abs(frame_epoch - scan_epoch[index]))) > 5 * spacing:
+                    return {}
+                n_scan_points = scan_epoch.size
+            else:
+                n_scan_points = _scan_point_count(group)
+                if not n_scan_points:
+                    return {}
+                index = _evenly_spaced_index(n_frames, n_scan_points)
 
             channels: dict[str, np.ndarray] = {}
             for name in group.keys():
@@ -251,7 +304,7 @@ def read_scan_channels(image: Path, frame_epoch) -> dict[str, np.ndarray]:
                     values = np.asarray(item["value"][()], dtype=float).ravel()
                 except (TypeError, ValueError):
                     continue
-                if values.size == scan_epoch.size:
+                if values.size == n_scan_points:
                     channels[SCAN_PREFIX + name] = values[index]
             return channels
     except OSError:
@@ -347,7 +400,7 @@ class ImageData:
             self.stored_rois = self._read_stored_rois(f)
 
         # Offered next to the image file's own channels, on the same frames.
-        self.channels.update(read_scan_channels(self.path, self.epoch))
+        self.channels.update(read_scan_channels(self.path, self.epoch, n_frames))
 
     @property
     def n_frames(self) -> int:
