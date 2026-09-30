@@ -229,12 +229,19 @@ def image_path_for_master(master: Path) -> Path | None:
     stem = master.stem
     if stem.endswith("_master"):
         stem = stem[: -len("_master")]
-    for prefix in ("pva_", "pva"):
+    # "" last: newer writers drop the pva_ prefix entirely and name the file
+    # after the scan alone, so tise2_2_00353_master.hdf sits beside plain
+    # tise2_2_00353.h5. Tried after the prefixed forms, so a directory holding
+    # both still prefers the one the old convention named.
+    for prefix in ("pva_", "pva", ""):
         for suffix in (".h5", ".hdf5", ".hdf"):
             candidates.append(master.parent / f"{prefix}{stem}{suffix}")
 
     for candidate in candidates:
-        if candidate.is_file():
+        # Guessing at names this broadly can land on a file that merely shares
+        # one, so take only a candidate that actually holds an image stack
+        # rather than handing the viewer something it cannot open.
+        if candidate.is_file() and is_image_file(candidate):
             return candidate
     return None
 

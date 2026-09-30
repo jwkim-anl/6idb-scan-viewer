@@ -150,9 +150,14 @@ that follows no naming convention gets found at all — `tise2_2_00353.h5` besid
 `tise2_2_00353_master.hdf`, with no `pva` about it. It is looked for where the
 master says, resolved against the experiment root when the recorded path is
 relative, and then by its own name beside the master, which is where it lands once
-a directory has been copied off the beamline. Failing all that, the older
-`pva_streaming` `file_name` and then the `pva_<stem>.h5` convention still apply, so
-nothing that worked before stops working.
+a directory has been copied off the beamline.
+
+Failing all that it falls back on naming: the older `pva_streaming` `file_name`, then
+`pva_<stem>.h5`, and finally the plain `<stem>.h5` — a file need not start with `pva`
+to be found. Because those last guesses are only names, a candidate is opened and
+checked for an image stack before it is accepted, so a file that merely shares a name
+is passed over rather than handed to the viewer. Nothing that resolved before
+resolves differently.
 
 
 ```bash
