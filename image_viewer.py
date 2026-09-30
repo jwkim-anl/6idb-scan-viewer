@@ -115,6 +115,64 @@ def _decode(value) -> str:
     return str(item)
 
 
+# Newer masters name the detector's own file outright, instead of leaving it
+# to the pva_* naming convention. The value is one "detector: path" per line.
+BLUESKY_METADATA_PATH = "entry/instrument/bluesky/metadata"
+DETECTOR_PATH_KEYS = ("detectors_file_relative_path", "detectors_file_full_path")
+MASTER_PATH_KEY = "master_file_path"
+
+
+def _metadata_text(master: Path, key: str) -> str | None:
+    try:
+        with h5py.File(master, "r") as f:
+            group = f.get(BLUESKY_METADATA_PATH)
+            if group is None or key not in group:
+                return None
+            return _decode(group[key][()])
+    except OSError:
+        return None
+
+
+def detector_files_from_metadata(master: Path) -> list[str]:
+    """The detector file paths the master records, in the order it lists them.
+
+    The value reads ``lambda250k: /some/where/scan_00001.h5``, one detector per
+    line; older masters write an empty ``{}`` there, which yields nothing.
+    """
+    found: list[str] = []
+    for key in DETECTOR_PATH_KEYS:
+        text = _metadata_text(master, key)
+        if not text:
+            continue
+        for line in text.splitlines():
+            _name, sep, value = line.partition(":")
+            value = (value if sep else line).strip().strip("'\"")
+            if value and value not in ("{}", "{", "}") and value not in found:
+                found.append(value)
+    return found
+
+
+def _experiment_base(master: Path) -> Path | None:
+    """The directory the master's recorded relative path is measured from.
+
+    ``master_file_path`` is itself relative -- ``test_26_3/test_00001_master.hdf``
+    -- so stripping it from where the file actually sits gives the root the
+    detector's relative path is written against, wherever the tree has since
+    been copied to.
+    """
+    recorded = _metadata_text(master, MASTER_PATH_KEY)
+    if not recorded:
+        return None
+    tail = Path(recorded.strip())
+    actual = Path(master).resolve()
+    if tail.is_absolute() or not actual.as_posix().endswith(tail.as_posix()):
+        return None
+    base = actual
+    for _ in tail.parts:
+        base = base.parent
+    return base
+
+
 def _pva_name_from_metadata(master: Path) -> str | None:
     """The ``file_name:`` recorded in the master's ``pva_streaming`` YAML block."""
     try:
@@ -137,13 +195,32 @@ def _pva_name_from_metadata(master: Path) -> str | None:
 def image_path_for_master(master: Path) -> Path | None:
     """The image file belonging to *master*, or ``None`` if none is next to it.
 
-    Prefers the name the writer recorded in the master file, and falls back to
-    the ``<master stem minus "_master">`` -> ``pva_<stem>.h5`` convention. Only
-    the master's own directory is searched -- the recorded ``file_path`` points
-    at the beamline filesystem and is not meaningful elsewhere.
+    Tried in turn: the detector file the master names -- where it points, then
+    relative to the experiment root, then by name beside the master -- the
+    ``file_name`` in the older ``pva_streaming`` block, and last the
+    ``<master stem minus "_master">`` -> ``pva_<stem>.h5`` convention. Newer
+    masters name a file that follows no convention at all
+    (``test_00001.h5`` beside ``test_00001_master.hdf``), which only the
+    recorded name can find.
     """
     master = Path(master)
     candidates: list[Path] = []
+
+    # What the master says the detector wrote, tried where it points and then
+    # where the data actually is. A path recorded at the beamline stays valid
+    # there and is simply missing anywhere else, which costs one stat call.
+    base = _experiment_base(master)
+    for declared in detector_files_from_metadata(master):
+        declared_path = Path(declared)
+        if declared_path.is_absolute():
+            candidates.append(declared_path)
+        else:
+            if base is not None:
+                candidates.append(base / declared_path)
+            candidates.append(master.parent / declared_path)
+        # Failing that, the same file name beside the master: the usual state
+        # of a directory copied off the beamline.
+        candidates.append(master.parent / declared_path.name)
 
     recorded = _pva_name_from_metadata(master)
     if recorded:
@@ -152,12 +229,19 @@ def image_path_for_master(master: Path) -> Path | None:
     stem = master.stem
     if stem.endswith("_master"):
         stem = stem[: -len("_master")]
-    for prefix in ("pva_", "pva"):
+    # "" last: newer writers drop the pva_ prefix entirely and name the file
+    # after the scan alone, so tise2_2_00353_master.hdf sits beside plain
+    # tise2_2_00353.h5. Tried after the prefixed forms, so a directory holding
+    # both still prefers the one the old convention named.
+    for prefix in ("pva_", "pva", ""):
         for suffix in (".h5", ".hdf5", ".hdf"):
             candidates.append(master.parent / f"{prefix}{stem}{suffix}")
 
     for candidate in candidates:
-        if candidate.is_file():
+        # Guessing at names this broadly can land on a file that merely shares
+        # one, so take only a candidate that actually holds an image stack
+        # rather than handing the viewer something it cannot open.
+        if candidate.is_file() and is_image_file(candidate):
             return candidate
     return None
 
