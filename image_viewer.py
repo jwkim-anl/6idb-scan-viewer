@@ -60,6 +60,7 @@ Run standalone on one or more image files with::
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -83,6 +84,13 @@ ROI_GROUP_PATH = "entry/data/rois"
 CA_GROUP_PATHS = ("entry/data/metadata/ca", "entry/data/metadata/motor_positions")
 PVA_STREAMING_PATH = "entry/instrument/bluesky/metadata/pva_streaming"
 MASTER_PRIMARY_PATH = "entry/instrument/bluesky/streams/primary"
+MASTER_BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
+# The detector's ROIs as the master records them, e.g.
+# lambda250k_rois_roi1_min_x. The detector's name varies, so it is matched
+# rather than assumed.
+MASTER_ROI_PATTERN = re.compile(
+    r"^(?P<detector>.+)_rois_roi(?P<number>\d+)_(?P<field>min_x|min_y|size_x|size_y)$"
+)
 # Master-file channels are offered alongside the image file's own, under this
 # prefix so their provenance is plain and they cannot collide.
 SCAN_PREFIX = "scan/"
@@ -246,17 +254,49 @@ def image_path_for_master(master: Path) -> Path | None:
     return None
 
 
+# How far up from an image file to look for its master. Newer scans put the
+# image in a separate tree (…/lambda/<experiment>/scan.h5) from the master
+# (…/<experiment>/scan_master.hdf), so beside-it is no longer enough.
+MASTER_SEARCH_DEPTH = 3
+
+
 def master_path_for_image(image: Path) -> Path | None:
-    """The master file this image file belongs to, beside it on disk."""
+    """The master file this image file belongs to.
+
+    Beside the image first. Failing that, a short walk up the tree, trying each
+    ancestor and each ancestor's copy of the image's own directory name -- which
+    is where the master sits when the detector writes into a parallel tree. The
+    name is specific enough (``<scan>_master.hdf``) that the search stays safe;
+    callers that already know the pair should pass it rather than rely on this.
+    """
+    image = Path(image)
     stem = image.stem
     for prefix in ("pva_", "pva"):
         if stem.startswith(prefix):
             stem = stem[len(prefix):]
             break
-    for suffix in (".hdf", ".hdf5", ".h5"):
-        candidate = image.parent / f"{stem}_master{suffix}"
-        if candidate.is_file():
-            return candidate
+    names = [f"{stem}_master{suffix}" for suffix in (".hdf", ".hdf5", ".h5")]
+
+    directories = [image.parent]
+    here = image.parent.resolve()
+    leaf = here.name          # the image's own folder, looked for in each ancestor
+    for _ in range(MASTER_SEARCH_DEPTH):
+        parent = here.parent
+        if parent == here:
+            break
+        directories.append(parent)
+        directories.append(parent / leaf)   # the same folder in a sibling tree
+        here = parent
+
+    seen = set()
+    for directory in directories:
+        if directory in seen:
+            continue
+        seen.add(directory)
+        for name in names:
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -337,8 +377,56 @@ def _scan_point_count(group) -> int | None:
     return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
+def read_master_rois(master: Path) -> list[dict]:
+    """The detector's ROIs as recorded in the master's baseline.
+
+    Newer image files carry no ``entry/data/rois`` of their own, so this is
+    the only record of where the detector's ROIs were. The numbers are the
+    same ones the older writer put in the image file -- a corner and a size in
+    pixels -- so they come back in the same shape.
+    """
+    found: dict[tuple[str, int], dict] = {}
+    try:
+        with h5py.File(master, "r") as f:
+            group = f.get(MASTER_BASELINE_PATH)
+            if group is None:
+                return []
+            for name in group.keys():
+                match = MASTER_ROI_PATTERN.match(name)
+                if match is None:
+                    continue
+                item = group[name]
+                source = "value_start" if "value_start" in item else "value"
+                if source not in item:
+                    continue
+                try:
+                    value = float(np.asarray(item[source][()]).ravel()[0])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                key = (match["detector"], int(match["number"]))
+                found.setdefault(key, {})[match["field"]] = value
+    except OSError:
+        return []
+
+    rois = []
+    for (_detector, number), parts in sorted(found.items(), key=lambda kv: kv[0][1]):
+        if not all(k in parts for k in ("min_x", "min_y", "size_x", "size_y")):
+            continue          # half a rectangle is no rectangle
+        rois.append(
+            {
+                "name": f"ROI{number}",
+                "x": parts["min_x"],
+                "y": parts["min_y"],
+                "w": max(1.0, parts["size_x"]),
+                "h": max(1.0, parts["size_y"]),
+                "angle": 0.0,
+            }
+        )
+    return rois
+
+
 def read_scan_channels(
-    image: Path, frame_epoch, n_frames: int | None = None
+    image: Path, frame_epoch, n_frames: int | None = None, master: Path | None = None
 ) -> dict[str, np.ndarray]:
     """The master file's primary fields, resampled onto the image's frames.
 
@@ -355,7 +443,8 @@ def read_scan_channels(
     have_epoch = frame_epoch is not None and len(frame_epoch) > 0
     if not have_epoch and not n_frames:
         return {}
-    master = master_path_for_image(image)
+    if master is None:
+        master = master_path_for_image(image)
     if master is None:
         return {}
     try:
@@ -450,8 +539,12 @@ class ImageData:
     display the right way round.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, master: Path | None = None):
         self.path = Path(path)
+        # Newer scans keep the image in a different tree from its master, so
+        # the beside-it reverse lookup no longer finds it. The caller usually
+        # knows the pair already; guessing is only the fallback.
+        self.master_path = Path(master) if master is not None else master_path_for_image(self.path)
         with h5py.File(self.path, "r") as f:
             dset = f.get(IMAGE_DATA_PATH)
             if dset is None or not isinstance(dset, h5py.Dataset):
@@ -487,9 +580,15 @@ class ImageData:
             )
             self.channels = self._read_channels(f, n_frames)
             self.stored_rois = self._read_stored_rois(f)
+        if not self.stored_rois and self.master_path is not None:
+            # Nothing in the image file: newer writers leave the rectangles to
+            # the master's baseline instead.
+            self.stored_rois = read_master_rois(self.master_path)
 
         # Offered next to the image file's own channels, on the same frames.
-        self.channels.update(read_scan_channels(self.path, self.epoch, n_frames))
+        self.channels.update(
+            read_scan_channels(self.path, self.epoch, n_frames, master=self.master_path)
+        )
 
     @property
     def n_frames(self) -> int:
@@ -1737,15 +1836,21 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
 
     ROI_DOCK_WIDTH = 240
 
-    def __init__(self, paths, parent=None):
+    def __init__(self, paths, parent=None, masters=None):
         super().__init__(parent)
         if isinstance(paths, (str, Path)):
             paths = [paths]
         paths = [Path(p) for p in paths]
         if not paths:
             raise RuntimeError("No image file to open.")
+        # The scan browser resolved these pairs already; without them each
+        # image has to guess its master back, which only works when the two
+        # sit in the same directory.
+        masters = list(masters) if masters else [None] * len(paths)
+        if len(masters) != len(paths):
+            masters = [None] * len(paths)
 
-        self.datasets = [ImageData(path) for path in paths]
+        self.datasets = [ImageData(path, master) for path, master in zip(paths, masters)]
         self._check_total_size()
         self._check_frame_shapes()
 
@@ -2435,8 +2540,10 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
     def _restore_stored_rois(self):
         """Recreate the rectangles the writer saved in ``entry/data/rois``.
 
-        These describe the detector's own ROIs rather than anything the user
-        drew here, so they start locked -- nudging one by accident would
+        They come from the image file's own ``entry/data/rois`` when it has
+        one, and otherwise from the master's baseline. Either way they describe
+        the detector's own ROIs rather than anything the user drew here, so
+        they start locked -- nudging one by accident would
         silently stop it matching the ROI the beamline recorded. With several
         files open the first file's set is used; they are shared by all panels.
         """

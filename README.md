@@ -177,6 +177,14 @@ counts), **Auto levels** or typed **Color min/max**, **Full range**, **Aspect 1:
 
 ### ROIs
 
+The four rectangles the detector was using are recreated on opening, **locked**, so
+that nudging one by accident cannot silently stop it matching what the beamline
+recorded. They come from the image file's own `entry/data/rois` where it has one,
+and otherwise from the master's baseline (`<detector>_rois_roi1_min_x` and friends),
+which is the only record newer scans keep. Unlock one in the ROI table to move it.
+
+
+
 The rectangles stored in the file (`entry/data/rois`) are recreated on open and
 start **locked** — they describe the detector's own ROIs, and nudging one would
 silently stop it matching what the beamline recorded. The table has a tick for

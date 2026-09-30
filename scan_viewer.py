@@ -1328,8 +1328,9 @@ class HdfViewer(QtWidgets.QMainWindow):
             self.status.showMessage(f"No image file found for: {', '.join(missing)}")
             return
 
+        masters = [master for master, image in pairs if image is not None]
         try:
-            window = ImageViewerWindow(images, parent=self)
+            window = ImageViewerWindow(images, parent=self, masters=masters)
         except (RuntimeError, OSError) as exc:
             QtWidgets.QMessageBox.critical(self, "Could not open images", str(exc))
             return
