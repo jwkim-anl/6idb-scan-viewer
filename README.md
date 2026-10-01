@@ -300,7 +300,7 @@ says which is in force.
 
 ### Display (left panel)
 
-- **Visibility** — colormap, **Show points**, **Show slice**, point size
+- **Visibility** — colormap, **Background**, **Show points**, **Show slice**, point size
 - **Intensity range** — min/max, or **Auto**
 - **HKL range** — per-axis limits, or **Whole map**
 - **Downsampling** — **On** plus **Max drawn**; takes every Nth point so the cloud
@@ -310,6 +310,13 @@ says which is in force.
 
 The cloud is coloured by intensity with **opacity rising along the scale**, so faint
 points fade out instead of filling the view with haze.
+
+**Background** switches between black and white. Black shows a faint cloud best;
+white is what a paper wants. Everything drawn over it follows — the H/K/L letters,
+the tick numbers, the scalar bar and the slice handle — because pyvista takes each
+label's colour from its own theme font, which is black, and would otherwise leave
+them invisible on one background or the other. The same control is in the `.vti`
+viewer.
 
 ### The slice
 

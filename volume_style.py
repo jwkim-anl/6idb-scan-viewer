@@ -16,13 +16,28 @@ from PyQt5 import QtWidgets
 
 COLORMAPS = ("viridis", "plasma", "inferno", "magma", "turbo", "jet", "gray")
 AXIS_NAMES = ("H", "K", "L")
-BACKGROUND = "black"
-AXIS_COLOR = "white"
-# The plane widget draws in one colour; the default is far too dark on black.
-SLICE_COLOR = "yellow"
-# pyvista takes the scalar bar's text colour from the theme font, which is
-# black -- the numbers vanish against the background unless it is set here.
-SCALAR_BAR = {"color": AXIS_COLOR, "title": "intensity"}
+BACKGROUNDS = ("black", "white")
+
+
+def theme(background: str) -> dict:
+    """The colours that go with a background.
+
+    Nothing here can be left to pyvista: it takes every label's colour from
+    its own theme font, which is black, so on a black background the axis
+    letters, the tick numbers and the scalar bar all vanish unless each is
+    told otherwise. The slice handle needs the same care in reverse -- yellow
+    reads well on black and disappears on white.
+    """
+    if background not in BACKGROUNDS:
+        background = BACKGROUNDS[0]
+    dark = background == "black"
+    axis = "white" if dark else "black"
+    return {
+        "background": background,
+        "axis": axis,
+        "slice": "yellow" if dark else "#c1121f",
+        "scalar_bar": {"color": axis, "title": "intensity"},
+    }
 # HKL is a small number that matters in its third decimal -- 5.321, not 5.3.
 AXIS_NUMBER_FORMAT = "%.3f"
 

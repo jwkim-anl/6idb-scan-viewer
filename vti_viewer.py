@@ -26,13 +26,11 @@ import numpy as np
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
-from volume_style import AXIS_COLOR
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
-from volume_style import BACKGROUND
+from volume_style import BACKGROUNDS
 from volume_style import COLORMAPS
-from volume_style import SCALAR_BAR
-from volume_style import SLICE_COLOR
+from volume_style import theme
 from volume_style import make_drawable
 from volume_style import spin as _spin
 
@@ -47,6 +45,7 @@ class VtiWindow(QtWidgets.QMainWindow):
     def __init__(self, path=None, parent=None):
         super().__init__(parent)
         self.grid = None
+        self._theme = theme(BACKGROUNDS[0])
         self.path: Path | None = None
         self._volume_actor = None
         self._slice_actor = None
@@ -209,6 +208,15 @@ class VtiWindow(QtWidgets.QMainWindow):
         self.cmap_combo.addItems(COLORMAPS)
         self.cmap_combo.currentIndexChanged.connect(self._restyle)
         form.addRow("Colormap", self.cmap_combo)
+        self.background_combo = QtWidgets.QComboBox()
+        self.background_combo.addItems(BACKGROUNDS)
+        self.background_combo.setToolTip(
+            "Black shows a faint volume best; white is what a paper wants.\n"
+            "The axes, their numbers, the scalar bar and the slice handle all\n"
+            "follow."
+        )
+        self.background_combo.currentTextChanged.connect(self._background_changed)
+        form.addRow("Background", self.background_combo)
         self.show_volume_check = QtWidgets.QCheckBox("Show volume")
         self.show_volume_check.setChecked(True)
         self.show_volume_check.toggled.connect(self.refresh_view)
@@ -493,6 +501,13 @@ class VtiWindow(QtWidgets.QMainWindow):
             )
 
     # -- panel reactions ---------------------------------------------------
+
+    def _background_changed(self, name):
+        self._theme = theme(name)
+        # A full redraw: the axes and the scalar bar carry the colour, and
+        # neither is restyled in place.
+        self._needs_camera_reset = False
+        self.refresh_view()
 
     def _intensity_edited(self):
         if self._updating:
@@ -896,7 +911,7 @@ class VtiWindow(QtWidgets.QMainWindow):
                 grid,
                 normal=tuple(normal),
                 origin=tuple(origin),
-                widget_color=SLICE_COLOR,
+                widget_color=self._theme["slice"],
                 tubing=False,
                 outline_opacity=0,
                 implicit=True,
@@ -915,7 +930,7 @@ class VtiWindow(QtWidgets.QMainWindow):
                 clim=(low, high),
                 name="slice",
                 show_scalar_bar=take_bar,
-                scalar_bar_args=dict(SCALAR_BAR),
+                scalar_bar_args=dict(self._theme["scalar_bar"]),
                 reset_camera=False,
             )
         except Exception as exc:
@@ -942,7 +957,7 @@ class VtiWindow(QtWidgets.QMainWindow):
                 clim=(low, high),
                 name="volume",
                 show_scalar_bar=take_bar,
-                scalar_bar_args=dict(SCALAR_BAR),
+                scalar_bar_args=dict(self._theme["scalar_bar"]),
                 reset_camera=False,
             )
         except Exception as exc:
@@ -1010,10 +1025,10 @@ class VtiWindow(QtWidgets.QMainWindow):
         self._volume_actor = None
         self._slice_actor = None
         self._slice_avg_actor = None
-        self.plotter.set_background(BACKGROUND)
+        self.plotter.set_background(self._theme["background"])
         # color= is the *label* colour; left alone the H/K/L letters are drawn
         # in the theme font colour, which is black and so invisible here.
-        self.plotter.add_axes(xlabel="H", ylabel="K", zlabel="L", color=AXIS_COLOR)
+        self.plotter.add_axes(xlabel="H", ylabel="K", zlabel="L", color=self._theme["axis"])
         bounds = self.display_bounds()
 
         low = self.int_min_spin.value()
@@ -1039,7 +1054,7 @@ class VtiWindow(QtWidgets.QMainWindow):
                     ytitle="K",
                     ztitle="L",
                     fmt=AXIS_NUMBER_FORMAT,
-                    color=AXIS_COLOR,
+                    color=self._theme["axis"],
                     grid=False,
                     location="outer",
                     ticks="both",

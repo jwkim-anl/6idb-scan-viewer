@@ -47,13 +47,11 @@ import xrayutilities as xu
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
-from volume_style import AXIS_COLOR
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
-from volume_style import BACKGROUND
+from volume_style import BACKGROUNDS
 from volume_style import COLORMAPS
-from volume_style import SCALAR_BAR
-from volume_style import SLICE_COLOR
+from volume_style import theme
 from volume_style import spin as _spin
 
 from image_viewer import MASTER_PRIMARY_PATH
@@ -1096,6 +1094,7 @@ class HklWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.geometry_data = read_geometry(Path(image_path), master_path)
         self.cloud: HklCloud | None = None
+        self._theme = theme(BACKGROUNDS[0])
         self.grid = None                 # the loaded .vti, when one has been made
         self.grid_path: Path | None = None
         self.grid_range: tuple | None = None
@@ -1176,6 +1175,15 @@ class HklWindow(QtWidgets.QMainWindow):
         self.cmap_combo.addItems(COLORMAPS)
         self.cmap_combo.currentIndexChanged.connect(self.refresh_view)
         form.addRow("Colormap", self.cmap_combo)
+        self.background_combo = QtWidgets.QComboBox()
+        self.background_combo.addItems(BACKGROUNDS)
+        self.background_combo.setToolTip(
+            "Black shows a faint cloud best; white is what a paper wants.\n"
+            "The axes, their numbers, the scalar bar and the slice handle all\n"
+            "follow, so nothing is left invisible against the new background."
+        )
+        self.background_combo.currentTextChanged.connect(self._background_changed)
+        form.addRow("Background", self.background_combo)
         self.show_points_check = QtWidgets.QCheckBox("Show points")
         self.show_points_check.setChecked(True)
         self.show_points_check.toggled.connect(self.refresh_view)
@@ -1344,6 +1352,10 @@ class HklWindow(QtWidgets.QMainWindow):
         self.setup_dialog.show()
         self.setup_dialog.raise_()
         self.setup_dialog.activateWindow()
+
+    def _background_changed(self, name):
+        self._theme = theme(name)
+        self.refresh_view()
 
     def _intensity_edited(self):
         if self._updating:
@@ -1617,7 +1629,7 @@ class HklWindow(QtWidgets.QMainWindow):
             point_size=self.point_size_spin.value() * 1.6,
             name="slice",
             show_scalar_bar=take_bar,
-            scalar_bar_args=dict(SCALAR_BAR),
+            scalar_bar_args=dict(self._theme["scalar_bar"]),
             reset_camera=False,
         )
 
@@ -1739,7 +1751,7 @@ class HklWindow(QtWidgets.QMainWindow):
                 clim=(low, high),
                 name="volume",
                 show_scalar_bar=take_bar,
-                scalar_bar_args=dict(SCALAR_BAR),
+                scalar_bar_args=dict(self._theme["scalar_bar"]),
                 reset_camera=False,
             )
         except Exception as exc:
@@ -1756,11 +1768,11 @@ class HklWindow(QtWidgets.QMainWindow):
         import pyvista as pv
 
         self.plotter.clear()
-        self.plotter.set_background(BACKGROUND)
+        self.plotter.set_background(self._theme["background"])
         # color= is the *label* colour; left alone the H/K/L letters are drawn
         # in the theme font colour, which is black and so invisible here.
         self.plotter.add_axes(
-            xlabel="H", ylabel="K", zlabel="L", color=AXIS_COLOR
+            xlabel="H", ylabel="K", zlabel="L", color=self._theme["axis"]
         )
         bounds = self.display_bounds()
         showing_volume = self.show_volume_check.isChecked() and self.grid is not None
@@ -1782,7 +1794,7 @@ class HklWindow(QtWidgets.QMainWindow):
                 point_size=self.point_size_spin.value(),
                 name="points",
                 show_scalar_bar=True,   # first drawn owns the bar; see below
-                scalar_bar_args=dict(SCALAR_BAR),
+                scalar_bar_args=dict(self._theme["scalar_bar"]),
                 reset_camera=False,
             )
 
@@ -1810,7 +1822,7 @@ class HklWindow(QtWidgets.QMainWindow):
                     normal=tuple(normal),
                     origin=tuple(origin),
                     bounds=bounds,
-                    color=SLICE_COLOR,
+                    color=self._theme["slice"],
                     implicit=True,
                     normal_rotation=True,
                     origin_translation=True,
@@ -1832,7 +1844,7 @@ class HklWindow(QtWidgets.QMainWindow):
                     ytitle="K",
                     ztitle="L",
                     fmt=AXIS_NUMBER_FORMAT,
-                    color=AXIS_COLOR,
+                    color=self._theme["axis"],
                     grid=False,
                     location="outer",
                     ticks="both",
