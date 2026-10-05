@@ -1,0 +1,9 @@
+{
+ "count_time": 2.0,
+ "is_scan": true,
+ "motors": [
+  "psic_eta"
+ ],
+ "plan": "rel_scan",
+ "points": "101"
+}

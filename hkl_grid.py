@@ -323,6 +323,10 @@ def grid_to_vti(
     )
     gridder.KeepData(True)                   # accumulate across the frame loop
 
+    # Keep the request as it was asked for: the cache compares against what a
+    # caller passed, and "to the end" resolved to a frame number would never
+    # match the -1 that stands for it.
+    requested_last = -1 if last is None else int(last)
     last = geometry.n_frames - 1 if last is None else min(last, geometry.n_frames - 1)
     frames = range(max(0, first), last + 1, max(1, frame_step))
     rows, columns = geometry.frame_shape
@@ -388,9 +392,7 @@ def grid_to_vti(
         [geometry.master_path.name if geometry.master_path else ""]
     )
     grid.field_data["frames"] = np.array([len(frames)])
-    grid.field_data["frame_range"] = np.array(
-        [first, -1 if last is None else last, frame_step]
-    )
+    grid.field_data["frame_range"] = np.array([first, requested_last, frame_step])
     grid.field_data["geometry"] = np.array([geometry_fingerprint(geometry)])
     grid.field_data["oversample"] = np.array([float(oversample)])
     grid.field_data["transmission_corrected"] = np.array(

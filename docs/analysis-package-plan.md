@@ -1,0 +1,136 @@
+# `da6idb` — an analysis package for the 6-ID-B data files
+
+The five windows in this repository already read and process everything the
+beamline writes, but all of it is reachable only through Qt. This is the plan
+for lifting the data layer out into a package that a Jupyter notebook can
+import, with the windows then built on top of it rather than beside it.
+
+## Phase 0 — decisions
+
+| | |
+|---|---|
+| Package name | **`da6idb`** |
+| Tabular data | **pandas** DataFrames |
+| Gridded maps | **xarray**, with real H/K/L coordinates |
+| Notebook needs Qt | **no** — the package must import without PyQt5, pyqtgraph or pyvistaqt |
+| Deployment | local, JupyterLab |
+
+Still open, and not blocking Phases 1–2:
+
+- one repository or two, once the package exists
+- whether the windows are refactored onto the package (strongly preferred: two
+  copies of this logic would drift) or left as they are
+
+## Where the code stands
+
+Measured, not estimated:
+
+| | |
+|---|---|
+| Qt-free functions | 2,066 lines, 64 public |
+| GUI classes | 6,527 lines |
+
+So the separation already exists *by function*; what is missing is the module
+boundary. Three things block a notebook today:
+
+1. **Every module imports Qt at module level.** `import hkl_grid` costs 2.8 s
+   and pulls in PyQt5, pyqtgraph, matplotlib and xrayutilities to reach one
+   pure function.
+2. **The data layer depends upward on the GUI.** `hkl_grid` imports
+   `HklGeometry`, `read_geometry` and `frame_hkl` from `hkl_viewer`, a
+   PyQt5/pyvistaqt module, which lazily imports `hkl_grid` back.
+3. **No tests and no packaging** — addressed by Phase 1 and Phase 5.
+
+## Sketch
+
+```
+da6idb/
+  files.py       find and pair master <-> image files
+  scan.py        master: metadata, primary/baseline, rasters, curve statistics
+  images.py      image stack, per-frame channels, stored ROIs
+  rois.py        ROI metrics, background subtraction, normalisation
+  hkl/
+    geometry.py  HklGeometry, read_geometry, hkl_setup.json, transmission
+    convert.py   point cloud
+    grid.py      .vti gridding, automatic resolution, caching
+    slice.py     plane sampling, slab averaging, line cuts
+  batch.py       scan-number expansion, batch gridding
+  export.py      ascii / csv / npz / hdf5
+
+gui/             the five windows, importing da6idb and holding no logic
+tests/
+pyproject.toml   extras: [hkl] xrayutilities+pyvista, [gui] pyqt+pyqtgraph, [dev] pytest
+```
+
+The notebook surface is a thin object layer over those functions, so a session
+does not begin by calling sixty-four of them by hand:
+
+```python
+from da6idb import open_folder
+
+folder = open_folder("/data/beamtime")
+folder.summary()                              # DataFrame: scan, plan, motor, range, points
+scan = folder[152]
+scan.primary()                                # DataFrame
+scan.hkl_position()                           # psic h/k/l, mean and spread
+
+images = scan.images()                        # the detector file, found as the GUI finds it
+images.rois                                   # image file's own, or the master's baseline
+images.roi_curve(0, "sum", normalise="Ion_Chamber_1")
+
+hkl = scan.hkl()                              # master + image + hkl_setup.json
+hkl.cloud(threshold=100)
+grid = hkl.grid(hkl_range=..., oversample=1)  # xarray, cached as the same .vti the GUI uses
+grid.slice(normal=(1, 1, 0), offset=0.01, average=5)
+```
+
+## Phases
+
+| | | status |
+|---|---|---|
+| 0 | decisions | **done** |
+| 1 | characterisation tests, before anything moves | **done** |
+| 2 | lift the data layer out unchanged; cut the `hkl_grid -> hkl_viewer` cycle | next |
+| 3 | the notebook API, and matplotlib plotting helpers | |
+| 4 | the windows import the package, one at a time | |
+| 5 | packaging, docs, example notebooks | |
+
+Phase 2 is a move, not a rewrite: the tests from Phase 1 have to keep passing
+unchanged throughout, and any that do not are either a bug being introduced or
+a deliberate change that should be argued for.
+
+## Phase 1 — what the tests pin
+
+45 tests, about 7 seconds, in `tests/`. They need neither pytest nor xarray:
+plain `test_*` functions that pytest will collect later, and `tests/run.py`
+runs them today. `DA6IDB_RECORD=1` rewrites the recorded values, which is the
+only way they should ever change.
+
+They are about **values**, not about whether a call raises. A refactor that
+moves a function unchanged has to reproduce the recorded numbers exactly.
+
+| file | pins |
+|---|---|
+| `test_files.py` | scan numbering, master <-> image pairing by convention, by declared path, by name beside the master; a same-named file holding no images is refused; ROIs out of the baseline |
+| `test_scan.py` | stream fields and the EPOCH/INDEX pseudo-fields, X-field choice for a motor scan and a count, scan metadata, curve statistics including degenerate input, cell edges, raster detection and statistics |
+| `test_images.py` | stack and channels, stored ROIs from either source, scan channels matched by timestamp *and* by position, a mismatched master refused, index arithmetic at the edges |
+| `test_hkl.py` | geometry and its sources, **centre-pixel H/K/L against the diffractometer's own psic_h/k/l**, frame corners, transmission, setup-file overrides and the fingerprint, cloud reduction |
+| `test_grid.py` | sampling measurements and cell size, the lattice, **VTK point ordering**, the cache, cancellation leaving nothing, plane sampling and slab averaging |
+| `test_batch.py` | scan-number expansion and parsing, discovery, one lattice across a batch |
+
+Only `tise2_2_00152` ships with the repository, so the rest is built from
+small deterministic fixtures shaped like the real files -- which also covers
+the awkward cases the example pair cannot: no frame timestamp, a count plan, a
+two-motor raster, a master naming its detector file elsewhere, ROIs in the
+baseline.
+
+Two checks are deliberately not golden comparisons, because they assert
+something physical rather than a number: the centre-pixel H/K/L must agree
+with the diffractometer to better than 5e-3, and a thicker slab must not be
+noisier than a thin one.
+
+### Does the suite actually bite?
+
+Multiplying the computed cell size by 1.05 -- the kind of thing a tidy-up
+might do -- fails three tests across two modules, including the slice shape.
+A suite that passes whatever happens would be worse than none.
