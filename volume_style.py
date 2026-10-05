@@ -14,8 +14,6 @@ from __future__ import annotations
 import numpy as np
 from PyQt5 import QtWidgets
 
-# Lives with the grids now; re-exported so the windows keep importing it here.
-from da6idb.hkl.grid import make_drawable  # noqa: F401
 
 COLORMAPS = ("viridis", "plasma", "inferno", "magma", "turbo", "jet", "gray")
 AXIS_NAMES = ("H", "K", "L")

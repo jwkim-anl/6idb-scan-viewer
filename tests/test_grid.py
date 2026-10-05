@@ -3,9 +3,7 @@
 import numpy as np
 from helpers import EXAMPLE_IMAGE, Sandbox, check, have_example
 
-import hkl_grid as hg
-import hkl_viewer as hv
-import slice_plot as sp
+from da6idb.hkl import geometry as hv, grid as hg, slice as sp
 
 RANGE = (0.95, 1.10, -0.60, -0.40, 7.40, 7.65)
 

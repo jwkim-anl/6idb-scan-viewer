@@ -3,7 +3,7 @@
 import numpy as np
 from helpers import EXAMPLE_IMAGE, EXAMPLE_MASTER, Sandbox, check, have_example
 
-import batch_grid as bg
+from da6idb import batch as bg
 
 
 def test_expand_scans():
@@ -47,7 +47,7 @@ def test_batch_shares_one_lattice():
     import shutil
     if not have_example():
         return
-    import hkl_grid as hg
+    from da6idb.hkl import grid as hg
     with Sandbox() as d:
         shutil.copy(EXAMPLE_IMAGE, d)
         shutil.copy(EXAMPLE_MASTER, d)

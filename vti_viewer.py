@@ -26,12 +26,12 @@ import numpy as np
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+from da6idb.hkl.grid import make_drawable
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
 from volume_style import BACKGROUNDS
 from volume_style import COLORMAPS
 from volume_style import theme
-from volume_style import make_drawable
 from volume_style import spin as _spin
 
 INTENSITY = "intensity"

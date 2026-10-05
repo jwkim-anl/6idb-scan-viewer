@@ -65,34 +65,8 @@ import h5py
 import numpy as np
 import pyqtgraph as pg
 
-# Moved into da6idb; re-exported for the rest of this module and its callers.
-from da6idb.files import (
-    HDF_SUFFIXES,
-    file_prefix,
-    list_hdf_files,
-    scan_number,
-)
-
-# Moved into da6idb; re-exported for the rest of this module and its callers.
+from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
 from da6idb.scan import (
-    BASELINE_PATH,
-    EPOCH_FIELD,
-    INDEX_FIELD,
-    METADATA_PATH,
-    PRIMARY_PATH,
-    PSIC_HKL_FIELDS,
-    _SCAN_HKL_CACHE,
-    _SCAN_INFO_CACHE,
-    _as_text,
-    _build_grid,
-    _epoch_source,
-    _grid_axis_candidates,
-    _half_max_crossing,
-    _is_time_like,
-    _meta_text,
-    _primary_point_count,
-    _scalarize,
-    _yaml_items,
     axis_edges,
     curve_stats,
     default_x_field,
@@ -106,14 +80,15 @@ from da6idb.scan import (
     scan_x_field,
     stream_fields,
 )
+
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+# the one window-to-window import left, and it is about windows
 from image_viewer import ImageViewerWindow
-from image_viewer import resolve_image_file
 
 
 # Curves are drawn with pyqtgraph, which defaults to a black canvas; the rest

@@ -54,46 +54,20 @@ from volume_style import COLORMAPS
 from volume_style import theme
 from volume_style import spin as _spin
 
-# Moved into da6idb; re-exported for the rest of this module and its callers.
+from da6idb.hkl.convert import HklCloud, convert
 from da6idb.hkl.geometry import (
     AXIS_CHOICES,
-    BASELINE_PATH,
-    CA_PATH,
     DETECTOR_LABELS,
-    DETECTOR_MOTORS,
-    HKL_PATH,
     HklGeometry,
-    IMAGE_TRANSMISSION,
-    MASTER_TRANSMISSION,
     SAMPLE_LABELS,
-    SAMPLE_MOTORS,
-    SETUP_FIELDS,
     SETUP_FILENAME,
-    _as_floats,
-    _as_strings,
-    _first_float,
-    _fit_frames,
-    _read_image_geometry,
-    _read_master_geometry,
-    _text,
-    apply_setup,
     read_geometry,
     read_setup,
-    read_transmission,
     setup_differences,
     setup_path,
     write_setup,
 )
-from da6idb.hkl.convert import (
-    HklCloud,
-    build_converter,
-    convert,
-    frame_hkl,
-)
 
-from image_viewer import MASTER_PRIMARY_PATH
-from image_viewer import master_path_for_image
-from image_viewer import nearest_index
 
 IMAGE_DATA_PATH = "entry/data/data"
 FRAME_TIMESTAMP_PATH = "entry/data/frame_timestamp"

@@ -3,7 +3,7 @@
 import numpy as np
 from helpers import EXAMPLE_IMAGE, EXAMPLE_MASTER, Sandbox, check, have_example
 
-import hkl_viewer as hv
+from da6idb.hkl import convert as _c, geometry as hv
 
 
 def test_geometry_sources_and_values():
@@ -29,14 +29,14 @@ def test_centre_pixel_matches_the_diffractometer():
         return
     import h5py
     g = hv.read_geometry(EXAMPLE_IMAGE)
-    hxrd = hv.build_converter(g)
+    hxrd = _c.build_converter(g)
     row, column = (int(round(v)) for v in g.center_pixel)
     with h5py.File(EXAMPLE_MASTER) as f:
         pri = f["entry/instrument/bluesky/streams/primary"]
         theirs = {k: np.asarray(pri[f"psic_{k}"]["value"]) for k in "hkl"}
     worst = 0.0
     for frame in (0, 25, 50, 75, 100):
-        ours = [np.asarray(a)[row, column] for a in hv.frame_hkl(g, hxrd, frame)]
+        ours = [np.asarray(a)[row, column] for a in _c.frame_hkl(g, hxrd, frame)]
         mine = np.array(ours, dtype=float)
         theirs_frame = np.array([theirs[k][frame] for k in "hkl"])
         worst = max(worst, float(np.max(np.abs(mine - theirs_frame))))
@@ -49,8 +49,8 @@ def test_frame_hkl_corners():
     if not have_example():
         return
     g = hv.read_geometry(EXAMPLE_IMAGE)
-    hxrd = hv.build_converter(g)
-    h, k, l = (np.asarray(a) for a in hv.frame_hkl(g, hxrd, 50))
+    hxrd = _c.build_converter(g)
+    h, k, l = (np.asarray(a) for a in _c.frame_hkl(g, hxrd, 50))
     corners = [(0, 0), (0, -1), (-1, 0), (-1, -1)]
     check("hkl/frame50_corners",
           [[float(h[r, c]), float(k[r, c]), float(l[r, c])] for r, c in corners])
@@ -86,7 +86,7 @@ def test_setup_file_overrides_and_only_records_changes():
         assert again.sources["distance"] == "setup"
         assert again.sources["ub"] == "master"       # untouched by the override
         # and the fingerprint must notice
-        import hkl_grid as hg
+        from da6idb.hkl import grid as hg
         assert hg.geometry_fingerprint(again) != hg.geometry_fingerprint(
             hv.read_geometry(image, use_setup=False))
 
@@ -95,7 +95,7 @@ def test_conversion_reduces_to_the_brightest():
     if not have_example():
         return
     g = hv.read_geometry(EXAMPLE_IMAGE)
-    cloud = hv.convert(g, first=0, last=4, step=2, threshold=100, max_points=5000)
+    cloud = _c.convert(g, first=0, last=4, step=2, threshold=100, max_points=5000)
     assert cloud.points.shape[0] <= 5000
     assert cloud.points.shape[0] == cloud.intensity.size
     assert float(cloud.intensity.min()) > 100

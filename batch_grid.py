@@ -37,26 +37,13 @@ import numpy as np
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
-from hkl_grid import GridCancelled
-from hkl_grid import grid_to_vti
-from hkl_grid import measured_range
-from hkl_grid import natural_step
-from hkl_viewer import SETUP_FILENAME
-from hkl_viewer import read_geometry
-from hkl_viewer import read_setup
-from image_viewer import master_path_for_image
-from scan_viewer import scan_number
+from da6idb.batch import OUTPUT_DIRECTORY, expand_scans, find_scans, grid_scans, parse_scans
+from da6idb.files import master_path_for_image
+from da6idb.hkl.geometry import SETUP_FILENAME, read_geometry, read_setup
+from da6idb.hkl.grid import measured_range
 from volume_style import AXIS_NAMES
 from volume_style import spin as _spin
 
-# Moved into da6idb; re-exported for the rest of this module.
-from da6idb.batch import (
-    OUTPUT_DIRECTORY,
-    expand_scans,
-    find_scans,
-    grid_scans,
-    parse_scans,
-)
 
 
 

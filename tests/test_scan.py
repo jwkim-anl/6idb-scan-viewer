@@ -3,7 +3,7 @@
 import numpy as np
 from helpers import EXAMPLE_MASTER, Sandbox, check, have_example, write_master
 
-import scan_viewer as sv
+from da6idb import scan as sv
 
 
 def test_stream_fields_and_pseudo_fields():

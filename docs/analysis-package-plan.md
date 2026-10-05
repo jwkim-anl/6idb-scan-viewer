@@ -92,8 +92,8 @@ grid.slice(normal=(1, 1, 0), offset=0.01, average=5)
 | 1 | characterisation tests, before anything moves | **done** |
 | 2 | lift the data layer out unchanged; cut the `hkl_grid -> hkl_viewer` cycle | **done** |
 | 3 | the notebook API | **done** |
-| 4 | the windows import the package, one at a time | next |
-| 5 | packaging, docs, example notebooks | |
+| 4 | the windows import the package, one at a time | **done** |
+| 5 | packaging, docs, example notebooks | next |
 
 Phase 2 is a move, not a rewrite: the tests from Phase 1 have to keep passing
 unchanged throughout, and any that do not are either a bug being introduced or
@@ -221,3 +221,41 @@ modules stay usable without pandas or xarray.
 subprocess with `PyQt5`, `pyqtgraph` and `pyvistaqt` made unimportable and
 imports the whole package, so the claim that a notebook needs no Qt is tested
 rather than asserted.
+
+## Phase 4 — the package becomes the only copy
+
+Three jobs, of which only the first was interesting.
+
+**The ROI arithmetic moved** into `da6idb/rois.py`, against a plain
+`Rect(x, y, w, h, angle)` rather than a pyqtgraph object. It had been left in
+`image_viewer.py` during phase 2, and the cost of that showed up immediately:
+`Images.roi_curve`, written for the notebook in phase 3, had to reimplement
+it, and did so without rotation, without background subtraction and without
+centre of mass. Both now call the same function. The notebook gained all
+three; the viewer gained nothing and lost nothing.
+
+Except that it did lose something, and this is worth recording. The viewer's
+rotated ROIs went through pyqtgraph's `getArrayRegion`, whose sample count is
+the ceiling of a size its own arithmetic computes -- and that size lands a few
+parts in 1e16 above the integer at some angles and exactly on it at others. An
+8x6 rectangle was therefore sampled 8x6 at 0, 30, 60 and 90 degrees and 9x7 at
+15 and 45, over the same pixels, its sum jumping about 30% with nothing
+changing but the angle. On a sweep of sizes and angles it happened on a third
+of the edges tested, inflating the sampled area by 14 to 56%. The package
+takes the count from the geometry, so it is now 8x6 at every angle. Rotated
+ROI numbers have changed accordingly; unrotated ones are bit-for-bit what they
+were.
+
+**The export writers moved** into `da6idb/export.py`. They were methods on a
+window, so a notebook could not write a slice to a file at all.
+`export.write_dataarray` takes an xarray slice straight from `HklMap.slice`.
+
+**The forwarding imports are gone.** The windows had been importing 112 names
+from the package, 75 of them only to pass on to each other -- `image_viewer`
+imported 33 and used 2. Each window now imports exactly what it uses, and the
+tests import from the package, since that is what they are testing. One
+window-to-window import remains and belongs: the scan browser opens an image
+viewer.
+
+The goldens did not move, which is the point: the numbers are the same, the
+code is in one place.

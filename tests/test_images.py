@@ -3,7 +3,7 @@
 import numpy as np
 from helpers import EXAMPLE_IMAGE, Sandbox, check, have_example, write_image, write_master
 
-import image_viewer as iv
+from da6idb import files, images as iv
 
 
 def test_nearest_index_matching():

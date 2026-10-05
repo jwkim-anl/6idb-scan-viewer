@@ -75,47 +75,9 @@ except ImportError:  # pragma: no cover - depends on the environment
 import h5py
 import pyqtgraph as pg
 
-# Moved into da6idb; re-exported so this module's own code, the other
-# windows and anything already importing it keep working unchanged.
-from da6idb.files import (
-    BLUESKY_METADATA_PATH,
-    DETECTOR_PATH_KEYS,
-    IMAGE_DATA_PATH,
-    MASTER_BASELINE_PATH,
-    MASTER_PATH_KEY,
-    MASTER_PRIMARY_PATH,
-    MASTER_ROI_PATTERN,
-    MASTER_SEARCH_DEPTH,
-    PVA_STREAMING_PATH,
-    ROI_GROUP_PATH,
-    _RESOLVE_CACHE,
-    _decode,
-    _experiment_base,
-    _metadata_text,
-    _pva_name_from_metadata,
-    detector_files_from_metadata,
-    image_path_for_master,
-    is_image_file,
-    master_path_for_image,
-    read_master_rois,
-    resolve_image_file,
-)
+from da6idb.images import ImageData, MAX_TOTAL_BYTES
+from da6idb.rois import Rect, series
 
-# Moved into da6idb; re-exported for the rest of this module and its callers.
-from da6idb.images import (
-    CA_GROUP_PATHS,
-    FRAME_TIMESTAMP_PATH,
-    HDF5PLUGIN_HINT,
-    ImageData,
-    MAX_STACK_BYTES,
-    MAX_TOTAL_BYTES,
-    SCAN_PREFIX,
-    _evenly_spaced_index,
-    _scan_point_count,
-    _scan_time_base,
-    nearest_index,
-    read_scan_channels,
-)
 from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
@@ -224,109 +186,56 @@ def axis_label(key: str) -> str:
 # -- ROI geometry and per-frame reduction -----------------------------------
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# -- ROI geometry and per-frame reduction -----------------------------------
+#
+# The arithmetic lives in da6idb.rois now, against a plain rectangle, so a
+# notebook gets the same numbers. These turn a pyqtgraph ROI into one.
+
+
 def roi_is_rotated(roi) -> bool:
     try:
-        return abs(float(roi.angle())) % 360.0 > 1e-6
+        return Rect.from_roi(roi).rotated
     except Exception:
         return False
 
 
 def roi_bbox(roi, shape: tuple[int, int]) -> tuple[int, int, int, int]:
     """The ROI's axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*."""
-    pos, size = roi.pos(), roi.size()
-    nx, ny = shape
-    x0 = int(np.floor(pos.x()))
-    y0 = int(np.floor(pos.y()))
-    x1 = int(np.ceil(pos.x() + size.x()))
-    y1 = int(np.ceil(pos.y() + size.y()))
-    x0 = max(0, min(x0, nx))
-    x1 = max(x0, min(x1, nx))
-    y0 = max(0, min(y0, ny))
-    y1 = max(y0, min(y1, ny))
-    return x0, x1, y0, y1
+    return Rect.from_roi(roi).bbox(shape)
 
 
-def roi_sub_frame(frame: np.ndarray, roi, image_item=None) -> np.ndarray | None:
+def roi_sub_frame(frame, roi, image_item=None):
     """The pixels of one frame inside *roi*.
 
-    An unrotated ROI is a plain slice, which is both faster and exactly what
-    :func:`roi_series` reduces over -- going through ``getArrayRegion`` here
-    instead would round fractional edges differently and make the stats line
-    disagree with the plotted curve. Only a rotated ROI needs the resampling.
+    *image_item* is accepted and ignored: the rectangle is resampled from its
+    own geometry rather than through the scene, which is what lets the same
+    call work outside a window.
     """
-    sub = None
-    if roi_is_rotated(roi) and image_item is not None:
-        try:
-            sub = roi.getArrayRegion(frame, image_item)
-            if sub is not None and getattr(sub, "ndim", 0) > 2:
-                sub = np.squeeze(sub)
-        except Exception:
-            sub = None
-    if sub is None or getattr(sub, "size", 0) == 0:
-        x0, x1, y0, y1 = roi_bbox(roi, (frame.shape[0], frame.shape[1]))
-        sub = frame[x0:x1, y0:y1] if x1 > x0 and y1 > y0 else None
-    if sub is None or sub.size == 0:
-        return None
-    return np.asarray(sub, dtype=np.float32)
+    return Rect.from_roi(roi).sub_frame(frame)
 
 
-def roi_pixel_count(roi, shape: tuple[int, int], image_item=None, frame=None) -> int:
+def roi_pixel_count(roi, shape, image_item=None, frame=None) -> int:
     """How many pixels *roi* covers -- the N in a ``background x N`` correction."""
-    if roi_is_rotated(roi) and frame is not None:
-        sub = roi_sub_frame(frame, roi, image_item)
-        return int(sub.size) if sub is not None else 0
-    x0, x1, y0, y1 = roi_bbox(roi, shape)
-    return max(0, (x1 - x0) * (y1 - y0))
+    return Rect.from_roi(roi).pixel_count(shape, frame=frame)
 
 
-def _empty_series(n_frames: int) -> dict[str, np.ndarray]:
-    zeros = np.zeros(n_frames, dtype=float)
-    return {key: zeros.copy() for key in ("sum", "mean", "min", "max", "comx", "comy")}
-
-
-def _reduce_sub(sub: np.ndarray) -> tuple[float, float, float, float, float, float]:
-    """``(sum, mean, min, max, comx, comy)`` of one ROI sub-image indexed ``[x, y]``."""
-    total = float(np.sum(sub))
-    weight = total if total != 0.0 else 1.0
-    comx = float((np.arange(sub.shape[0]) @ sub.sum(axis=1)) / weight)
-    comy = float((sub.sum(axis=0) @ np.arange(sub.shape[1])) / weight)
-    return total, float(np.mean(sub)), float(np.min(sub)), float(np.max(sub)), comx, comy
-
-
-def roi_series(stack: np.ndarray, roi, image_item=None) -> dict[str, np.ndarray]:
-    """Per-frame ROI metrics over the whole stack.
-
-    An unrotated ROI is a plain slice of the stack, so the reductions run over
-    all frames at once; a rotated one falls back to ``getArrayRegion`` per frame.
-    """
-    n_frames = int(stack.shape[0])
-
-    if roi_is_rotated(roi):
-        series = _empty_series(n_frames)
-        for i in range(n_frames):
-            sub = roi_sub_frame(stack[i], roi, image_item)
-            if sub is None:
-                continue
-            values = _reduce_sub(sub)
-            for key, value in zip(("sum", "mean", "min", "max", "comx", "comy"), values):
-                series[key][i] = value
-        return series
-
-    x0, x1, y0, y1 = roi_bbox(roi, (stack.shape[1], stack.shape[2]))
-    if x1 <= x0 or y1 <= y0:
-        return _empty_series(n_frames)
-
-    sub = stack[:, x0:x1, y0:y1]
-    sums = sub.sum(axis=(1, 2), dtype=np.float64)
-    weights = np.where(sums != 0.0, sums, 1.0)
-    return {
-        "sum": sums,
-        "mean": sub.mean(axis=(1, 2), dtype=np.float64),
-        "min": sub.min(axis=(1, 2)).astype(float),
-        "max": sub.max(axis=(1, 2)).astype(float),
-        "comx": (sub.sum(axis=2, dtype=np.float64) @ np.arange(x1 - x0)) / weights,
-        "comy": (sub.sum(axis=1, dtype=np.float64) @ np.arange(y1 - y0)) / weights,
-    }
+def roi_series(stack, roi, image_item=None) -> dict:
+    """Per-frame ROI metrics over the whole stack."""
+    return series(stack, Rect.from_roi(roi))
 
 
 # -- ROIs, shared across every open image -----------------------------------

@@ -27,19 +27,10 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 
+from da6idb import export
+from da6idb.hkl.slice import MAX_PIXELS, _axis_index, sample_plane
 from volume_style import AXIS_NAMES
 
-# Moved into da6idb; re-exported for the rest of this module.
-from da6idb.hkl.slice import (
-    AXIS_TOLERANCE,
-    MAX_PIXELS,
-    _axis_index,
-    average_along_normal,
-    plane_basis,
-    sample_plane,
-    sample_volume,
-    slab_offsets,
-)
 
 # How far below the top of the scale a log plot reaches when no floor is set.
 # Fuzzy gridding leaves cells holding a millionth of a count -- numerical dust
@@ -74,22 +65,8 @@ CUT_LINE = "Arbitrary line"
 
 
 
-def _slug(text):
-    """A label that is safe in a file name or an HDF5 key."""
-    return re.sub(r"[^0-9A-Za-z]+", "_", str(text)).strip("_") or "axis"
 
 
-def _suffix_for(path: Path, selected: str) -> str:
-    """Which writer to use: the extension if it says, else the chosen filter."""
-    extension = path.suffix.lower()
-    if extension in (".txt", ".dat", ".csv", ".npz", ".h5", ".hdf5"):
-        return extension
-    for marker, extension in (
-        ("CSV", ".csv"), ("NumPy", ".npz"), ("HDF5", ".h5"), ("Text", ".txt")
-    ):
-        if selected.startswith(marker):
-            return extension
-    return ".txt"
 
 
 def _edges(centres):
@@ -611,14 +588,14 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
             out = []
             h, k, l = self._hkl_along(xs, np.full(xs.size, self._cut[1]))
             out.append((
-                f"along_{_slug(data['x_label'])}",
+                f"along_{export.slug(data['x_label'])}",
                 f"position runs along {data['x_label']}",
                 {"position": xs, "H": h, "K": k, "L": l,
                  "intensity": np.ma.filled(horizontal, np.nan)},
             ))
             h, k, l = self._hkl_along(np.full(ys.size, self._cut[0]), ys)
             out.append((
-                f"along_{_slug(data['y_label'])}",
+                f"along_{export.slug(data['y_label'])}",
                 f"position runs along {data['y_label']}",
                 {"position": ys, "H": h, "K": k, "L": l,
                  "intensity": np.ma.filled(vertical, np.nan)},
@@ -651,7 +628,7 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
         if not path:
             return None, None
         path = Path(path)
-        suffix = _suffix_for(path, selected or "")
+        suffix = export.suffix_for(path, selected or "")
         if path.suffix.lower() not in (".txt", ".dat", ".csv", ".npz", ".h5", ".hdf5"):
             path = path.with_suffix(suffix)
         return path, suffix
@@ -666,46 +643,10 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
         data = self._data
         image = np.ma.filled(data["image"], np.nan)
         x, y = data["x"], data["y"]
-        header = self._provenance() + [
-            "x axis: %s  from %.6f to %.6f  (%d points, step %.6g)"
-            % (data["x_label"], x[0], x[-1], x.size,
-               (x[1] - x[0]) if x.size > 1 else 0.0),
-            "y axis: %s  from %.6f to %.6f  (%d points, step %.6g)"
-            % (data["y_label"], y[0], y[-1], y.size,
-               (y[1] - y[0]) if y.size > 1 else 0.0),
-            "rows run along y, columns along x; unmeasured cells are nan",
-        ]
         try:
-            if suffix in (".txt", ".dat"):
-                np.savetxt(path, image, fmt="%.6g",
-                           header="\n".join(header))
-            elif suffix == ".csv":
-                # First row the x values, first column the y values, so it
-                # opens in a spreadsheet as the map it is.
-                table = np.full((image.shape[0] + 1, image.shape[1] + 1), np.nan)
-                table[0, 1:] = x
-                table[1:, 0] = y
-                table[1:, 1:] = image
-                np.savetxt(path, table, fmt="%.6g", delimiter=",",
-                           header="\n".join(header + [
-                               "first row: %s values; first column: %s values"
-                               % (data["x_label"], data["y_label"])]))
-            elif suffix == ".npz":
-                np.savez_compressed(
-                    path, intensity=image, x=x, y=y,
-                    x_label=data["x_label"], y_label=data["y_label"],
-                    description="\n".join(header),
-                )
-            else:
-                import h5py
-
-                with h5py.File(path, "w") as handle:
-                    handle.create_dataset("intensity", data=image, compression="gzip")
-                    handle.create_dataset("x", data=x)
-                    handle.create_dataset("y", data=y)
-                    handle["x"].attrs["label"] = data["x_label"]
-                    handle["y"].attrs["label"] = data["y_label"]
-                    handle.attrs["description"] = "\n".join(header)
+            export.write_matrix(path, image, x, y, suffix=suffix,
+                                x_label=data["x_label"], y_label=data["y_label"],
+                                description=self._provenance())
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self, "Could not write", f"{path.name}\n\n{type(exc).__name__}: {exc}"
@@ -739,47 +680,8 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
 
     def _write_columns(self, path, suffix, sets):
         """One file of columns per cut for text, one file holding all otherwise."""
-        provenance = self._provenance()
-        written = []
-        if suffix in (".txt", ".dat", ".csv"):
-            delimiter = "," if suffix == ".csv" else " "
-            for name, note, columns in sets:
-                target = (
-                    path if len(sets) == 1
-                    else path.with_name(f"{path.stem}_{name}{path.suffix}")
-                )
-                table = np.column_stack([np.asarray(v, float) for v in columns.values()])
-                np.savetxt(
-                    target, table, fmt="%.6g", delimiter=delimiter,
-                    header="\n".join(
-                        provenance + [f"cut: {name}", note,
-                                      f"cut width: {self.width_spin.value()} px",
-                                      delimiter.join(columns.keys())]
-                    ),
-                )
-                written.append(target.name)
-        elif suffix == ".npz":
-            payload = {"description": "\n".join(provenance)}
-            for name, note, columns in sets:
-                payload[f"{name}/note"] = np.array(note)
-                for key, values in columns.items():
-                    payload[f"{name}/{_slug(key)}"] = np.asarray(values, float)
-            np.savez_compressed(path, **payload)
-            written.append(path.name)
-        else:
-            import h5py
-
-            with h5py.File(path, "w") as handle:
-                handle.attrs["description"] = "\n".join(provenance)
-                handle.attrs["cut_width_px"] = int(self.width_spin.value())
-                for name, note, columns in sets:
-                    group = handle.create_group(name)
-                    group.attrs["note"] = note
-                    for key, values in columns.items():
-                        group.create_dataset(_slug(key), data=np.asarray(values, float))
-            written.append(path.name)
-        return written
-
+        return export.write_columns(path, sets, description=self._provenance(),
+                                    suffix=suffix, note_width=self.width_spin.value())
     def _value_at(self, x, y):
         """The intensity under the cursor, read off the sampled image."""
         data = self._data

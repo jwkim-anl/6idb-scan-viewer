@@ -20,7 +20,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from da6idb import rois as _rois
 from da6idb import scan as _scan
+from da6idb.rois import Rect
 from da6idb.files import list_hdf_files, resolve_image_file, scan_number
 from da6idb.hkl import convert as _convert
 from da6idb.hkl import grid as _grid
@@ -265,44 +267,63 @@ class Images:
         """The detector's own rectangles, wherever they were recorded."""
         return pd.DataFrame(self.data.stored_rois)
 
-    def roi_curve(self, roi=0, metric="sum", normalise=None) -> pd.Series:
+    def rect(self, roi=0) -> Rect:
+        """One ROI as a rectangle: an index into :attr:`rois`, or x/y/w/h[/angle]."""
+        if isinstance(roi, Rect):
+            return roi
+        if isinstance(roi, (int, np.integer)):
+            return Rect.from_stored(self.data.stored_rois[int(roi)])
+        return Rect(*(float(v) for v in roi))
+
+    def roi_series(self, roi=0) -> pd.DataFrame:
+        """Every metric for one ROI, frame by frame.
+
+        The same arithmetic the image viewer runs, rotation included, so a
+        number read here and a number read there are the same number.
+        """
+        values = _rois.series(self.data.stack, self.rect(roi))
+        frame = pd.DataFrame(values)
+        frame.index = pd.RangeIndex(self.n_frames, name="frame")
+        return frame
+
+    def roi_curve(self, roi=0, metric="sum", normalise=None,
+                  background=None) -> pd.Series:
         """One ROI's metric against frame number.
 
-        *roi* is an index into :attr:`rois` or an explicit
-        ``(x, y, width, height)``.
+        With *background* -- another ROI -- its mean per pixel is taken off
+        the pixel-value metrics, the sum losing it times the pixel count, as
+        the viewer does. The centre of mass is deliberately left on the raw
+        pixels: weighting a centroid by background-subtracted values goes
+        unstable wherever the corrected sum passes through zero.
         """
-        if isinstance(roi, (int, np.integer)):
-            spec = self.data.stored_rois[int(roi)]
-            x, y, w, h = spec["x"], spec["y"], spec["w"], spec["h"]
-            label = spec["name"]
-        else:
-            x, y, w, h = roi
-            label = f"roi({x:g},{y:g},{w:g},{h:g})"
-        x0, y0 = int(round(x)), int(round(y))
-        x1, y1 = x0 + int(round(w)), y0 + int(round(h))
-        box = self.data.stack[:, x0:x1, y0:y1]
-        if box.size == 0:
-            raise ValueError(f"{label} does not overlap the detector")
-        flat = box.reshape(box.shape[0], -1)
-        values = {
-            "sum": flat.sum(axis=1), "mean": flat.mean(axis=1),
-            "min": flat.min(axis=1), "max": flat.max(axis=1),
-        }
-        if metric not in values:
-            raise ValueError(f"metric must be one of {sorted(values)}")
-        series = values[metric].astype(float)
+        if metric not in _rois.METRICS:
+            raise ValueError(f"metric must be one of {list(_rois.METRICS)}")
+        rect = self.rect(roi)
+        values = _rois.series(self.data.stack, rect)[metric].astype(float)
+        label = (self.data.stored_rois[int(roi)]["name"]
+                 if isinstance(roi, (int, np.integer)) else "roi")
+
+        if background is not None and metric not in ("comx", "comy"):
+            per_pixel = _rois.series(
+                self.data.stack, self.rect(background))["mean"].astype(float)
+            if metric == "sum":
+                values = values - per_pixel * rect.pixel_count(
+                    self.frame_shape, frame=self.data.stack[0])
+            else:
+                values = values - per_pixel
+            label += "-bg"
+
+        label = f"{label}.{metric}"
         if normalise:
             monitor = self.data.channels.get(normalise)
             if monitor is None:
                 raise KeyError(f"{normalise!r} is not a per-frame channel; "
                                "see .channels().columns")
             with np.errstate(divide="ignore", invalid="ignore"):
-                series = np.where(np.asarray(monitor) != 0,
-                                  series / np.asarray(monitor), np.nan)
-            label = f"{label}.{metric}/{normalise}"
-        else:
-            label = f"{label}.{metric}"
-        return pd.Series(series, name=label,
+                values = np.where(np.asarray(monitor) != 0,
+                                  values / np.asarray(monitor), np.nan)
+            label += f"/{normalise}"
+        return pd.Series(values, name=label,
                          index=pd.RangeIndex(self.n_frames, name="frame"))
 
     def __repr__(self):
