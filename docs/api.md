@@ -142,6 +142,7 @@ Reading a master file: its metadata, its streams and the numbers in them.
 - `read_primary(path, fields)` — Read the ``value`` array of each of *fields* from the primary stream.
 - `read_baseline(path)` — Return ``{field: (before, after)}`` from the baseline stream.
 - `read_scan_info(path)` — What the scan was: plan, points, motors and the range they covered.
+- `describe_fields(path, stream='primary')` — Every field in *stream*, with what it is and the range it covered.
 - `default_x_field(fields)` — The last field, skipping trailing time-like ones (e.g. ``scaler_time``).
 - `scan_x_field(path, fields)` — The field to plot against: the motor this scan actually moved.
 - `scan_hkl(path)` — Mean and spread of psic_h/k/l over the scan, or None if not recorded.
@@ -162,7 +163,8 @@ The objects a notebook starts from.
   - `.summary(self)` — One row per scan: what it was, what moved, how far, how many points.
 - **`Scan`** — One scan: its master file, and everything reachable from it.
   - properties: `number`, `plan`, `motors`, `points`, `info`
-  - `.fields(self, stream='primary')` — The field names in one stream, including EPOCH and INDEX.
+  - `.fields(self, stream='primary')` — Every field you can plot, with what it is and the range it covered.
+  - `.field_names(self, stream='primary')` — Just the names, in file order, including EPOCH and INDEX.
   - `.primary(self, fields=None)` — The primary stream, one column per field, one row per scan point.
   - `.baseline(self)` — What the baseline recorded before and after the scan.
   - `.curve(self, x=None, y=None, normalise=None)` — One x column and one or more y columns, normalised if asked.
@@ -186,4 +188,4 @@ The objects a notebook starts from.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 96 callables, 9 classes -->
+<!-- 98 callables, 9 classes -->

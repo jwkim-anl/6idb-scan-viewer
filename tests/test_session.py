@@ -132,3 +132,20 @@ def test_slice_is_labelled_by_axis_where_it_can_be():
         thick = m.slice(normal=(0, 0, 1), layers=5, output=d / "g.vti")
         assert float(np.nanstd(np.diff(thick.values, axis=1))) <= \
                float(np.nanstd(np.diff(thin.values, axis=1)))
+
+
+def test_fields_is_a_table_you_can_choose_axes_from():
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=9)
+        scan = da6idb.open_folder(d)[7]
+        table = scan.fields()
+        check("session/fields_columns", list(table.columns))
+        check("session/fields_index", list(table.index))
+        assert table.loc["psic_eta", "role"] == "scanned"
+        assert bool(table.loc["lambda250k_stats1_total", "hinted"])
+        # the plain list is still one call away, and in file order
+        names = scan.field_names()
+        assert sorted(names) == sorted(table.index)
+        assert names[-1] == "INDEX"
+        # curve() still works off the names, not the table
+        assert not scan.curve(y="lambda250k_stats1_total").empty

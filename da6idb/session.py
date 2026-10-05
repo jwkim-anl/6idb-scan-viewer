@@ -132,15 +132,34 @@ class Scan:
     def info(self) -> dict:
         return dict(self._info)
 
-    def fields(self, stream: str = "primary") -> list[str]:
-        """The field names in one stream, including EPOCH and INDEX."""
+    def fields(self, stream: str = "primary") -> pd.DataFrame:
+        """Every field you can plot, with what it is and the range it covered.
+
+        Indexed by field name, so ``.fields().index`` is the plain list.
+        *role* says whether a field is the motor the scan moved, a detector
+        channel or a positioner read along the way; *hinted* marks the
+        detector the plan nominated; *varies* with *min* and *max* shows at a
+        glance which fields are worth an axis and which sat still -- a
+        near-constant positive channel like an ion chamber is your monitor.
+        The scanned motor sorts first, the fields that never moved last.
+        """
+        rows = _scan.describe_fields(self.path, stream)
+        frame = pd.DataFrame(
+            rows,
+            columns=["field", "role", "hinted", "units", "varies",
+                     "min", "max", "source"],
+        )
+        return frame.set_index("field")
+
+    def field_names(self, stream: str = "primary") -> list[str]:
+        """Just the names, in file order, including EPOCH and INDEX."""
         return _scan.stream_fields(self.path, stream)
 
     # -- the numbers ------------------------------------------------------
 
     def primary(self, fields=None) -> pd.DataFrame:
         """The primary stream, one column per field, one row per scan point."""
-        wanted = list(fields) if fields is not None else self.fields("primary")
+        wanted = list(fields) if fields is not None else self.field_names("primary")
         data = _scan.read_primary(self.path, wanted)
         frame = pd.DataFrame({k: v for k, v in data.items() if v.ndim == 1})
         frame.index.name = "point"
@@ -159,7 +178,7 @@ class Scan:
         index for a plan that moved nothing -- the same choice the browser
         makes.
         """
-        fields = self.fields("primary")
+        fields = self.field_names("primary")
         if x is None:
             x = _scan.scan_x_field(self.path, fields) or _scan.default_x_field(fields)
         wanted = [y] if isinstance(y, str) else list(y or [])
