@@ -91,8 +91,8 @@ grid.slice(normal=(1, 1, 0), offset=0.01, average=5)
 | 0 | decisions | **done** |
 | 1 | characterisation tests, before anything moves | **done** |
 | 2 | lift the data layer out unchanged; cut the `hkl_grid -> hkl_viewer` cycle | **done** |
-| 3 | the notebook API, and matplotlib plotting helpers | next |
-| 4 | the windows import the package, one at a time | |
+| 3 | the notebook API | **done** |
+| 4 | the windows import the package, one at a time | next |
 | 5 | packaging, docs, example notebooks | |
 
 Phase 2 is a move, not a rewrite: the tests from Phase 1 have to keep passing
@@ -172,3 +172,52 @@ to 0.8 s dragging in none -- matplotlib still arrives, but through
 `make_drawable` moved out of `volume_style` into `da6idb.hkl.grid`: it prepares
 a grid for drawing rather than styling a window, and leaving it behind would
 have made the package depend on a Qt module for it.
+
+## Phase 3 — the notebook layer
+
+`da6idb.session` holds four objects, each a thin wrapper that computes nothing
+the modules beneath it do not already compute:
+
+```python
+from da6idb import open_folder
+
+folder = open_folder("/data/beamtime")   # ScanSet
+folder.summary()                         # DataFrame: plan, motors, range, points, image
+scan = folder[152]                       # Scan
+
+scan.curve("psic_eta", "lambda250k_stats1_total", normalise="Ion_Chamber_1")
+scan.statistics("lambda250k_stats1_total")   # max, min, centre, FWHM
+scan.hkl_position()                          # psic H/K/L, mean and spread
+scan.map("lambda250k_stats1_total")          # a two-motor raster, labelled
+
+images = scan.images()
+images.rois                                  # the detector's own rectangles
+images.roi_curve(0, "sum", normalise="scan/Ion_Chamber_1")
+
+m = scan.hkl()
+m.resolution()                               # what the sampling supports
+m.cloud(threshold=5000)                      # H, K, L, intensity
+cube = m.grid(oversample=1)                  # xarray, dims (H, K, L)
+cube.sel(L=7.52, method="nearest").plot()    # and it plots itself
+m.slice(normal=(1, 1, 0), offset=0.01, layers=5)
+```
+
+With no `x` given, `curve` takes the scan's own motor and falls back to the
+point index for a plan that moved nothing -- the same choice the browser makes,
+so a notebook and a window agree about what a count plan is plotted against.
+
+The gridded map is an `xarray.DataArray` with real H/K/L coordinates, which is
+what makes `sel(L=7.52, method="nearest")` and a bare `.plot()` work. It is
+backed by the same cached `.vti` the viewers use, so a grid made in a notebook
+opens in the viewer and the other way round. No plotting helpers were needed in
+the end: xarray and pandas already draw themselves.
+
+`import da6idb` imports nothing until something is asked for, so the reading
+modules stay usable without pandas or xarray.
+
+### Checked
+
+53 tests now, under both `pytest` and `tests/run.py`. One of them starts a
+subprocess with `PyQt5`, `pyqtgraph` and `pyvistaqt` made unimportable and
+imports the whole package, so the claim that a notebook needs no Qt is tested
+rather than asserted.

@@ -1,0 +1,15 @@
+{
+ "angles": "image",
+ "center_pixel": "master",
+ "detector_dirs": "image",
+ "detector_size": "image",
+ "distance": "master",
+ "energy_kev": "master",
+ "inplane": "image",
+ "pixel_direction": "master",
+ "primary_beam": "image",
+ "sample_dirs": "image",
+ "surface": "image",
+ "transmission": "image",
+ "ub": "master"
+}

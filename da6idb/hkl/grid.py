@@ -477,6 +477,35 @@ def make_drawable(grid, fill=0.0):
     np.nan_to_num(values, copy=False, nan=fill, posinf=fill, neginf=fill)
     return span
 
+def to_xarray(grid, name: str = "intensity"):
+    """A gridded map as an :class:`xarray.DataArray` with real H/K/L coordinates.
+
+    The same numbers as the ``.vti``, but labelled: ``cube.sel(L=7.52,
+    method="nearest").plot()`` is then a one-liner, and slicing by coordinate
+    beats remembering which index is which. Unmeasured cells stay NaN, which
+    is what xarray and matplotlib both expect of missing data.
+
+    xarray is imported here rather than at the top so the rest of the package
+    stays usable without it.
+    """
+    import xarray as xr
+
+    dims = tuple(int(n) for n in grid.dimensions)
+    origin = np.asarray(grid.origin, dtype=float)
+    spacing = np.asarray(grid.spacing, dtype=float)
+    values = np.asarray(grid.point_data[name]).reshape(dims, order="F")
+    coords = {
+        axis: origin[i] + np.arange(dims[i]) * spacing[i]
+        for i, axis in enumerate(("H", "K", "L"))
+    }
+    attrs = {}
+    for key in grid.field_data.keys():
+        item = np.asarray(grid.field_data[key]).ravel()
+        attrs[key] = item.tolist() if item.size > 1 else item[0].item()
+    return xr.DataArray(values, dims=("H", "K", "L"), coords=coords,
+                        name=name, attrs=attrs)
+
+
 def load_vti(path: str | Path):
     """Read a grid written by :func:`grid_to_vti`."""
     import pyvista as pv

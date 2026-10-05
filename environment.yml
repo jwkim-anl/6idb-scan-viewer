@@ -21,6 +21,10 @@
 #   slice_plot.py    the slice plane as a flat image with H/K/L axes
 #                    -> matplotlib, scipy
 #
+# da6idb/           the analysis package the windows are built on. Importable
+#                   without any of the Qt libraries above; the notebook layer
+#                   (da6idb.session) adds pandas and xarray.
+#
 # hdf5plugin looks optional -- it is imported in a try/except -- but the pva
 # image stacks are blosc-compressed, so without it the frames cannot be
 # decoded and the image viewer opens on an error instead of the data.
@@ -60,3 +64,10 @@ dependencies:
 
   # --- slice_plot.py (the slice as a flat image) ---
   - scipy >=1.10          # ndimage.map_coordinates resamples the plane; tested 1.16.2
+
+  # --- da6idb, the analysis package (notebook layer) ---
+  - pandas >=2.0          # tables; tested 3.0.6
+  - xarray >=2024.1       # gridded maps, labelled by H/K/L; tested 2026.9.0
+
+  # --- the test suite ---
+  - pytest >=7            # optional: tests/run.py runs them without it too

@@ -1,0 +1,6 @@
+{
+ "image": false,
+ "motors": "psic_eta",
+ "plan": "rel_scan",
+ "points": "9"
+}
