@@ -66,6 +66,7 @@ class HklCloud:
     kept_before_cap: int
 
     def bounds(self):
+        """``((h0, h1), (k0, k1), (l0, l1))`` of the points kept."""
         if self.points.size == 0:
             return None
         low = self.points.min(axis=0)

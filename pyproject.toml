@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "da6idb"
+version = "0.1.0.dev0"
+description = "Read and process the HDF5 files written at APS beamline 6-ID-B"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "BSD-3-Clause"}
+authors = [{name = "APS 6-ID-B"}]
+keywords = ["synchrotron", "diffraction", "reciprocal space", "bluesky", "HDF5"]
+
+# What it takes to read a scan and reduce it. Deliberately small: a notebook
+# that only wants the scalar channels should not have to install a renderer.
+dependencies = [
+    "numpy>=1.24",
+    "h5py>=3.8",
+    "hdf5plugin>=4.0",   # the image stacks are blosc-compressed
+    "scipy>=1.10",       # resampling: rotated ROIs, and planes through a grid
+]
+
+[project.optional-dependencies]
+# Tables and labelled arrays: da6idb.session, i.e. the notebook objects.
+notebook = ["pandas>=2.0", "xarray>=2024.1"]
+# Reciprocal space: the conversion and the gridding.
+hkl = ["xrayutilities>=1.7", "pyvista>=0.44"]
+# The five windows. Not needed to use the package.
+gui = ["pyqt5>=5.15,<6", "pyqtgraph>=0.13", "pyvistaqt>=0.11", "vtk>=9.2",
+       "matplotlib>=3.6"]
+dev = ["pytest>=7"]
+all = ["da6idb[notebook,hkl,gui,dev]"]
+
+[project.urls]
+Repository = "https://github.com/jwkim-anl/6idb-scan-viewer"
+
+[project.scripts]
+da6idb-grid = "da6idb.hkl.grid:main"
+
+[project.gui-scripts]
+da6idb-scans = "scan_viewer:main"
+da6idb-images = "image_viewer:main"
+da6idb-hkl = "hkl_viewer:main"
+da6idb-vti = "vti_viewer:main"
+da6idb-batch = "batch_grid:main"
+
+[tool.setuptools]
+packages = ["da6idb", "da6idb.hkl"]
+# The windows are single modules beside the package rather than inside it:
+# they are built on da6idb, not part of it.
+py-modules = ["scan_viewer", "image_viewer", "hkl_viewer", "vti_viewer",
+              "slice_plot", "batch_grid", "volume_style", "hkl_grid"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

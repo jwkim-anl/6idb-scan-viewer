@@ -124,6 +124,7 @@ def reduce_frame(sub: np.ndarray):
 
 
 def empty_series(n_frames: int) -> dict[str, np.ndarray]:
+    """Every metric, all zero -- what a rectangle off the detector reduces to."""
     zeros = np.zeros(int(n_frames), dtype=float)
     return {key: zeros.copy() for key in METRICS}
 

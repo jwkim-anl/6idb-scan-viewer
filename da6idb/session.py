@@ -133,6 +133,7 @@ class Scan:
         return dict(self._info)
 
     def fields(self, stream: str = "primary") -> list[str]:
+        """The field names in one stream, including EPOCH and INDEX."""
         return _scan.stream_fields(self.path, stream)
 
     # -- the numbers ------------------------------------------------------
@@ -217,12 +218,14 @@ class Scan:
     # -- what hangs off it ------------------------------------------------
 
     def images(self) -> "Images":
+        """The detector frames for this scan, found as the viewers find them."""
         image = resolve_image_file(self.path)
         if image is None:
             raise FileNotFoundError(f"no detector file found for {self.path.name}")
         return Images(image, master=self.path)
 
     def hkl(self, **kwargs) -> "HklMap":
+        """This scan in reciprocal space, geometry and all."""
         image = resolve_image_file(self.path)
         if image is None:
             raise FileNotFoundError(f"no detector file found for {self.path.name}")
@@ -253,6 +256,7 @@ class Images:
         return self.data.frame_shape
 
     def frame(self, index: int) -> np.ndarray:
+        """One frame, indexed ``[x, y]`` as the file stores it."""
         return self.data.stack[index]
 
     def channels(self) -> pd.DataFrame:
@@ -338,6 +342,9 @@ class HklMap:
         self.path = Path(image)
         self.master = Path(master) if master is not None else None
         self.geometry = read_geometry(self.path, self.master, **kwargs)
+        # What grid() was last asked for, so slice() cuts the grid you made
+        # rather than quietly building a second one at full resolution.
+        self._lattice: dict = {}
 
     def sources(self) -> pd.Series:
         """Where each piece of the geometry came from."""
@@ -365,6 +372,7 @@ class HklMap:
         })
 
     def extent(self) -> pd.DataFrame:
+        """The H, K, L box the scan actually reaches."""
         low, high = _grid.measured_range(self.geometry)
         return pd.DataFrame({"low": low, "high": high}, index=list("HKL"))
 
@@ -374,6 +382,8 @@ class HklMap:
         The same ``.vti`` the viewers cache, so a grid made here opens there
         and the other way round.
         """
+        self._lattice = dict(hkl_range=hkl_range, oversample=oversample,
+                             output=output, **kwargs)
         cube, path, _made = _grid.ensure_grid(
             self.path, self.master, hkl_range=hkl_range, oversample=oversample,
             output=output, reuse=reuse, geometry=self.geometry, **kwargs)
@@ -382,11 +392,17 @@ class HklMap:
         return array
 
     def slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs):
-        """A plane through the grid, as a labelled 2D array."""
+        """A plane through the grid, as a labelled 2D array.
+
+        Cuts the lattice :meth:`grid` last built unless told otherwise, so
+        asking for a coarse grid and then slicing it does not quietly produce
+        a second one at full resolution.
+        """
         import xarray as xr
 
+        settings = {**self._lattice, **kwargs}
         cube, _path, _made = _grid.ensure_grid(
-            self.path, self.master, geometry=self.geometry, **kwargs)
+            self.path, self.master, geometry=self.geometry, **settings)
         _grid.make_drawable(cube)
         normal = np.asarray(normal, dtype=float)
         normal = normal / np.linalg.norm(normal)

@@ -12,6 +12,7 @@ the pvapy streaming consumer:
 | **`batch_grid.py`** | grids a run of scans onto one common lattice |
 | **`vti_viewer.py`** | opens a saved `.vti` on its own, with no beamline data |
 | **`slice_plot.py`** | the slice plane as a flat image, with H/K/L axes |
+| **`da6idb/`** | the package underneath all of them, usable from a notebook |
 
 They chain together: the scan browser opens the image viewer for whatever scan you
 have selected, and the image viewer opens the HKL map for the file it is showing.
@@ -68,6 +69,68 @@ The image file's name is taken from the master's
 a 101-point scan is typically 101–103 frames. Wherever the two must be combined,
 each frame is matched to the scan point nearest it *in time*, using the epoch
 timestamps both files record.
+
+---
+
+## `da6idb` — the same thing without a window
+
+The windows are a view onto a package. Everything they read and compute lives in
+`da6idb`, which imports without Qt and works in a notebook or a script:
+
+```python
+from da6idb import open_folder
+
+folder = open_folder("/data/beamtime")
+folder.summary()                               # DataFrame: plan, motors, range, points
+scan = folder[152]
+
+scan.curve("psic_eta", "lambda250k_stats1_total", normalise="Ion_Chamber_1")
+scan.statistics("lambda250k_stats1_total")     # max, min, centre, FWHM
+scan.hkl_position()                            # psic H/K/L, mean and spread
+
+images = scan.images()                         # the detector file, found as the GUI finds it
+images.rois                                    # the rectangles the beamline recorded
+images.roi_curve(0, "sum", background=2, normalise="scan/Ion_Chamber_1")
+
+m = scan.hkl()
+cube = m.grid(oversample=1)                    # xarray with real H/K/L coordinates
+cube.sel(L=7.52, method="nearest").plot()
+m.slice(normal=(1, 1, 0), offset=0.01, layers=5)
+```
+
+Tables come back as pandas DataFrames and gridded maps as `xarray.DataArray`,
+so selecting a plane is `sel(L=7.52, method="nearest")` rather than an index, and
+both draw themselves. A grid made in a notebook is the same cached `.vti` the
+viewers read, so it opens in either.
+
+`examples/getting-started.ipynb` walks through all of it against the scan that
+ships with this repository. **[`docs/api.md`](docs/api.md)** lists every public
+function, generated from the source.
+
+### Installing
+
+```bash
+pip install -e .                 # reading and reducing: numpy, h5py, scipy
+pip install -e ".[notebook]"     # + pandas and xarray, for da6idb.session
+pip install -e ".[hkl]"          # + xrayutilities and pyvista, for reciprocal space
+pip install -e ".[gui]"          # + the windows
+pip install -e ".[all]"
+```
+
+The split is the point: a notebook that only wants the scalar channels does not
+have to install a renderer. `environment.yml` still builds the whole thing at once
+if that is easier.
+
+### Tests
+
+```bash
+pytest tests          # or: python tests/run.py, which needs no pytest
+```
+
+53 of them, pinning values rather than asking whether a call raises — a function
+that moves has to come back with the same numbers. One starts a subprocess with
+PyQt5, pyqtgraph and pyvistaqt made unimportable and loads the package anyway, so
+"no Qt" is tested rather than claimed.
 
 ---
 

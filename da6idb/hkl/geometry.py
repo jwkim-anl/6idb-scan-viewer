@@ -119,9 +119,11 @@ class HklGeometry:
         return 1.0 / value if np.isfinite(value) and value > 0 else 1.0
 
     def energy_ev(self) -> float:
+        """The beam energy in eV, which is what xrayutilities wants."""
         return float(self.energy_kev) * 1000.0
 
     def pixel_widths(self) -> tuple[float, float]:
+        """One pixel's size, from the detector's own size and frame shape."""
         return (
             self.detector_size[0] / self.frame_shape[0],
             self.detector_size[1] / self.frame_shape[1],

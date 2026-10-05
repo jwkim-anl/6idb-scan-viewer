@@ -514,6 +514,7 @@ def load_vti(path: str | Path):
 
 
 def main(argv=None) -> int:
+    """The command line: grid one file and say what came out."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("image", help="pva*.h5 detector stack")
     parser.add_argument("--master", help="master .hdf (found beside the image by default)")
