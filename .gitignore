@@ -28,6 +28,11 @@ last_scan.png
 __pycache__/
 *.py[cod]
 
+# Build metadata from `pip install -e .`
+*.egg-info/
+build/
+dist/
+
 # Local tooling and machine-specific state
 .claude/
 logs/
