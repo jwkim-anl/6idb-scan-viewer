@@ -90,8 +90,8 @@ grid.slice(normal=(1, 1, 0), offset=0.01, average=5)
 |---|---|---|
 | 0 | decisions | **done** |
 | 1 | characterisation tests, before anything moves | **done** |
-| 2 | lift the data layer out unchanged; cut the `hkl_grid -> hkl_viewer` cycle | next |
-| 3 | the notebook API, and matplotlib plotting helpers | |
+| 2 | lift the data layer out unchanged; cut the `hkl_grid -> hkl_viewer` cycle | **done** |
+| 3 | the notebook API, and matplotlib plotting helpers | next |
 | 4 | the windows import the package, one at a time | |
 | 5 | packaging, docs, example notebooks | |
 
@@ -134,3 +134,41 @@ noisier than a thin one.
 Multiplying the computed cell size by 1.05 -- the kind of thing a tidy-up
 might do -- fails three tests across two modules, including the slice shape.
 A suite that passes whatever happens would be worse than none.
+
+## Phase 2 — what moved, and what it cost
+
+Every function moved **verbatim**, by line range, rather than being retyped:
+the 45 tests from phase 1 were run after each module and had to keep passing
+untouched, which is the only evidence that a move changed nothing.
+
+The old modules now re-export what they used to define, so the windows, the
+tests and anything already importing them carry on unchanged. Nothing had to
+be edited to follow the move.
+
+```
+da6idb/files.py        333 lines   paths, pairing, ROI baseline
+da6idb/scan.py         477 lines   master metadata, streams, rasters, statistics
+da6idb/images.py                   stack, channels, stored ROIs
+da6idb/hkl/geometry.py             instrument description, setup file, transmission
+da6idb/hkl/convert.py              point cloud
+da6idb/hkl/grid.py                 .vti gridding, resolution, cache
+da6idb/hkl/slice.py                plane sampling, slab averaging
+da6idb/batch.py                    scan ranges, batch gridding
+```
+
+The import graph is now a DAG with no edge back into a window module:
+
+```
+files <- images <- hkl.geometry <- hkl.convert <- hkl.grid <- hkl.slice
+                                                        ^- batch
+```
+
+Checked by making `PyQt5`, `pyqtgraph` and `pyvistaqt` unimportable and loading
+the whole package anyway: 0.85 s, and it still reads geometry, frames, streams
+and converts. `import hkl_grid` went from 2.8 s dragging in four GUI libraries
+to 0.8 s dragging in none -- matplotlib still arrives, but through
+`xrayutilities`, not through us.
+
+`make_drawable` moved out of `volume_style` into `da6idb.hkl.grid`: it prepares
+a grid for drawing rather than styling a window, and leaving it behind would
+have made the package depend on a Qt module for it.

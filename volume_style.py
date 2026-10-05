@@ -14,6 +14,9 @@ from __future__ import annotations
 import numpy as np
 from PyQt5 import QtWidgets
 
+# Lives with the grids now; re-exported so the windows keep importing it here.
+from da6idb.hkl.grid import make_drawable  # noqa: F401
+
 COLORMAPS = ("viridis", "plasma", "inferno", "magma", "turbo", "jet", "gray")
 AXIS_NAMES = ("H", "K", "L")
 BACKGROUNDS = ("black", "white")
@@ -51,23 +54,3 @@ def spin(value, low, high, decimals=4, step=1.0, width=110):
     box.setKeyboardTracking(False)
     box.setValue(value)
     return box
-
-
-def make_drawable(grid, fill=0.0):
-    """Replace NaN in a loaded grid so a volume mapper can draw it.
-
-    NaN marks cells the scan never reached. Handed to a GPU volume mapper it
-    does not come out transparent -- it lights the whole empty region up -- so
-    it has to become a value at the bottom of the colour scale, where the
-    opacity ramp starts at zero.
-
-    Edits the array in place, which on a large grid saves copying a few hundred
-    megabytes, and returns ``(low, high)`` of the measured cells read before the
-    NaN goes. The file on disk still holds the NaN.
-    """
-    values = grid.point_data["intensity"]
-    if not np.isfinite(values).any():
-        return (0.0, 1.0)
-    span = (float(np.nanmin(values)), float(np.nanmax(values)))
-    np.nan_to_num(values, copy=False, nan=fill, posinf=fill, neginf=fill)
-    return span

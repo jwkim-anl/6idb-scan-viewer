@@ -74,588 +74,98 @@ except ImportError:  # pragma: no cover - depends on the environment
 
 import h5py
 import pyqtgraph as pg
+
+# Moved into da6idb; re-exported so this module's own code, the other
+# windows and anything already importing it keep working unchanged.
+from da6idb.files import (
+    BLUESKY_METADATA_PATH,
+    DETECTOR_PATH_KEYS,
+    IMAGE_DATA_PATH,
+    MASTER_BASELINE_PATH,
+    MASTER_PATH_KEY,
+    MASTER_PRIMARY_PATH,
+    MASTER_ROI_PATTERN,
+    MASTER_SEARCH_DEPTH,
+    PVA_STREAMING_PATH,
+    ROI_GROUP_PATH,
+    _RESOLVE_CACHE,
+    _decode,
+    _experiment_base,
+    _metadata_text,
+    _pva_name_from_metadata,
+    detector_files_from_metadata,
+    image_path_for_master,
+    is_image_file,
+    master_path_for_image,
+    read_master_rois,
+    resolve_image_file,
+)
+
+# Moved into da6idb; re-exported for the rest of this module and its callers.
+from da6idb.images import (
+    CA_GROUP_PATHS,
+    FRAME_TIMESTAMP_PATH,
+    HDF5PLUGIN_HINT,
+    ImageData,
+    MAX_STACK_BYTES,
+    MAX_TOTAL_BYTES,
+    SCAN_PREFIX,
+    _evenly_spaced_index,
+    _scan_point_count,
+    _scan_time_base,
+    nearest_index,
+    read_scan_channels,
+)
 from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
 
-IMAGE_DATA_PATH = "entry/data/data"
-FRAME_TIMESTAMP_PATH = "entry/data/frame_timestamp"
-ROI_GROUP_PATH = "entry/data/rois"
-CA_GROUP_PATHS = ("entry/data/metadata/ca", "entry/data/metadata/motor_positions")
-PVA_STREAMING_PATH = "entry/instrument/bluesky/metadata/pva_streaming"
-MASTER_PRIMARY_PATH = "entry/instrument/bluesky/streams/primary"
-MASTER_BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
-# The detector's ROIs as the master records them, e.g.
-# lambda250k_rois_roi1_min_x. The detector's name varies, so it is matched
-# rather than assumed.
-MASTER_ROI_PATTERN = re.compile(
-    r"^(?P<detector>.+)_rois_roi(?P<number>\d+)_(?P<field>min_x|min_y|size_x|size_y)$"
-)
-# Master-file channels are offered alongside the image file's own, under this
-# prefix so their provenance is plain and they cannot collide.
-SCAN_PREFIX = "scan/"
 
-# Refuse rather than thrash: the stack is read into memory in one go (a 110 MB
-# 103x516x516 stack decodes in well under a second).
-MAX_STACK_BYTES = 8 * 1024 ** 3
-# Several files are held at once when they are compared side by side.
-MAX_TOTAL_BYTES = 8 * 1024 ** 3
 
-HDF5PLUGIN_HINT = (
-    "The image stack is blosc-compressed and could not be decoded.\n\n"
-    "This needs the 'hdf5plugin' package importable in the Python running this "
-    "viewer:\n\n    pip install hdf5plugin\n\n"
-    "(or conda install -c conda-forge hdf5plugin)"
-)
 
 
 # -- Locating the image file ------------------------------------------------
 
 
-def _decode(value) -> str:
-    """Return *value* -- an h5py scalar that may be bytes or a 0-d array -- as text."""
-    value = np.asarray(value).reshape(-1)
-    if value.size == 0:
-        return ""
-    item = value[0]
-    if isinstance(item, bytes):
-        return item.decode(errors="replace")
-    return str(item)
 
 
-# Newer masters name the detector's own file outright, instead of leaving it
-# to the pva_* naming convention. The value is one "detector: path" per line.
-BLUESKY_METADATA_PATH = "entry/instrument/bluesky/metadata"
-DETECTOR_PATH_KEYS = ("detectors_file_relative_path", "detectors_file_full_path")
-MASTER_PATH_KEY = "master_file_path"
 
 
-def _metadata_text(master: Path, key: str) -> str | None:
-    try:
-        with h5py.File(master, "r") as f:
-            group = f.get(BLUESKY_METADATA_PATH)
-            if group is None or key not in group:
-                return None
-            return _decode(group[key][()])
-    except OSError:
-        return None
 
 
-def detector_files_from_metadata(master: Path) -> list[str]:
-    """The detector file paths the master records, in the order it lists them.
-
-    The value reads ``lambda250k: /some/where/scan_00001.h5``, one detector per
-    line; older masters write an empty ``{}`` there, which yields nothing.
-    """
-    found: list[str] = []
-    for key in DETECTOR_PATH_KEYS:
-        text = _metadata_text(master, key)
-        if not text:
-            continue
-        for line in text.splitlines():
-            _name, sep, value = line.partition(":")
-            value = (value if sep else line).strip().strip("'\"")
-            if value and value not in ("{}", "{", "}") and value not in found:
-                found.append(value)
-    return found
 
 
-def _experiment_base(master: Path) -> Path | None:
-    """The directory the master's recorded relative path is measured from.
-
-    ``master_file_path`` is itself relative -- ``test_26_3/test_00001_master.hdf``
-    -- so stripping it from where the file actually sits gives the root the
-    detector's relative path is written against, wherever the tree has since
-    been copied to.
-    """
-    recorded = _metadata_text(master, MASTER_PATH_KEY)
-    if not recorded:
-        return None
-    tail = Path(recorded.strip())
-    actual = Path(master).resolve()
-    if tail.is_absolute() or not actual.as_posix().endswith(tail.as_posix()):
-        return None
-    base = actual
-    for _ in tail.parts:
-        base = base.parent
-    return base
 
 
-def _pva_name_from_metadata(master: Path) -> str | None:
-    """The ``file_name:`` recorded in the master's ``pva_streaming`` YAML block."""
-    try:
-        with h5py.File(master, "r") as f:
-            item = f.get(PVA_STREAMING_PATH)
-            if item is None:
-                return None
-            text = _decode(item[()])
-    except OSError:
-        return None
-    for line in text.splitlines():
-        key, sep, value = line.partition(":")
-        if sep and key.strip() == "file_name":
-            name = value.strip().strip("'\"")
-            if name:
-                return name
-    return None
 
 
-def image_path_for_master(master: Path) -> Path | None:
-    """The image file belonging to *master*, or ``None`` if none is next to it.
-
-    Tried in turn: the detector file the master names -- where it points, then
-    relative to the experiment root, then by name beside the master -- the
-    ``file_name`` in the older ``pva_streaming`` block, and last the
-    ``<master stem minus "_master">`` -> ``pva_<stem>.h5`` convention. Newer
-    masters name a file that follows no convention at all
-    (``test_00001.h5`` beside ``test_00001_master.hdf``), which only the
-    recorded name can find.
-    """
-    master = Path(master)
-    candidates: list[Path] = []
-
-    # What the master says the detector wrote, tried where it points and then
-    # where the data actually is. A path recorded at the beamline stays valid
-    # there and is simply missing anywhere else, which costs one stat call.
-    base = _experiment_base(master)
-    for declared in detector_files_from_metadata(master):
-        declared_path = Path(declared)
-        if declared_path.is_absolute():
-            candidates.append(declared_path)
-        else:
-            if base is not None:
-                candidates.append(base / declared_path)
-            candidates.append(master.parent / declared_path)
-        # Failing that, the same file name beside the master: the usual state
-        # of a directory copied off the beamline.
-        candidates.append(master.parent / declared_path.name)
-
-    recorded = _pva_name_from_metadata(master)
-    if recorded:
-        candidates.append(master.parent / Path(recorded).name)
-
-    stem = master.stem
-    if stem.endswith("_master"):
-        stem = stem[: -len("_master")]
-    # "" last: newer writers drop the pva_ prefix entirely and name the file
-    # after the scan alone, so tise2_2_00353_master.hdf sits beside plain
-    # tise2_2_00353.h5. Tried after the prefixed forms, so a directory holding
-    # both still prefers the one the old convention named.
-    for prefix in ("pva_", "pva", ""):
-        for suffix in (".h5", ".hdf5", ".hdf"):
-            candidates.append(master.parent / f"{prefix}{stem}{suffix}")
-
-    for candidate in candidates:
-        # Guessing at names this broadly can land on a file that merely shares
-        # one, so take only a candidate that actually holds an image stack
-        # rather than handing the viewer something it cannot open.
-        if candidate.is_file() and is_image_file(candidate):
-            return candidate
-    return None
 
 
-# How far up from an image file to look for its master. Newer scans put the
-# image in a separate tree (…/lambda/<experiment>/scan.h5) from the master
-# (…/<experiment>/scan_master.hdf), so beside-it is no longer enough.
-MASTER_SEARCH_DEPTH = 3
 
 
-def master_path_for_image(image: Path) -> Path | None:
-    """The master file this image file belongs to.
-
-    Beside the image first. Failing that, a short walk up the tree, trying each
-    ancestor and each ancestor's copy of the image's own directory name -- which
-    is where the master sits when the detector writes into a parallel tree. The
-    name is specific enough (``<scan>_master.hdf``) that the search stays safe;
-    callers that already know the pair should pass it rather than rely on this.
-    """
-    image = Path(image)
-    stem = image.stem
-    for prefix in ("pva_", "pva"):
-        if stem.startswith(prefix):
-            stem = stem[len(prefix):]
-            break
-    names = [f"{stem}_master{suffix}" for suffix in (".hdf", ".hdf5", ".h5")]
-
-    directories = [image.parent]
-    here = image.parent.resolve()
-    leaf = here.name          # the image's own folder, looked for in each ancestor
-    for _ in range(MASTER_SEARCH_DEPTH):
-        parent = here.parent
-        if parent == here:
-            break
-        directories.append(parent)
-        directories.append(parent / leaf)   # the same folder in a sibling tree
-        here = parent
-
-    seen = set()
-    for directory in directories:
-        if directory in seen:
-            continue
-        seen.add(directory)
-        for name in names:
-            candidate = directory / name
-            if candidate.is_file():
-                return candidate
-    return None
 
 
-def _scan_time_base(group) -> np.ndarray | None:
-    """A primary field's EPOCH that is a real, advancing clock.
-
-    Not every field has one: an ``EpicsSignal`` that was never re-read keeps the
-    EPICS zero (631152000.0, i.e. 1990) for every point, which places nothing in
-    time. One good clock is used for the whole stream, so those fields are
-    carried along by it rather than dropped.
-    """
-    for name in group.keys():
-        item = group[name]
-        if not isinstance(item, h5py.Group) or "EPOCH" not in item:
-            continue
-        epoch = np.asarray(item["EPOCH"][()], dtype=float).ravel()
-        if (
-            epoch.size > 1
-            and epoch[0] > 1e9                      # later than 2001, so a real time
-            and np.all(np.diff(epoch) >= 0)
-            and epoch[-1] > epoch[0]
-        ):
-            return epoch
-    return None
 
 
-def nearest_index(frame_epoch: np.ndarray, scan_epoch: np.ndarray) -> np.ndarray:
-    """For each frame, the scan point closest to it in time.
-
-    Shared with ``hkl_viewer``, which matches the master's diffractometer angles
-    onto the frames the same way.
-    """
-    right = np.clip(np.searchsorted(scan_epoch, frame_epoch), 1, scan_epoch.size - 1)
-    left = right - 1
-    take_left = frame_epoch - scan_epoch[left] <= scan_epoch[right] - frame_epoch
-    return np.where(take_left, left, right)
 
 
-def _evenly_spaced_index(n_frames: int, n_scan_points: int) -> np.ndarray:
-    """Map each frame onto a scan point by position, not by time.
-
-    Used only when the image file has no per-frame timestamp to match against
-    (see ``read_scan_channels``), so frame 0 takes scan point 0, the last frame
-    takes the last scan point, and the rest are spread evenly in between.
-    """
-    if n_frames <= 1:
-        return np.zeros(max(n_frames, 0), dtype=int)
-    positions = np.arange(n_frames) * (n_scan_points - 1) / (n_frames - 1)
-    return np.round(positions).astype(int)
 
 
-def _scan_point_count(group) -> int | None:
-    """How many points the master's primary stream has.
-
-    Used in place of ``_scan_time_base`` when there is no frame timestamp to
-    read a count off of a real clock: the most common length among the
-    stream's own value arrays, since a few fields (e.g. read-once presets) can
-    be shorter or longer than the scan itself.
-    """
-    counts: dict[int, int] = {}
-    for name in group.keys():
-        item = group[name]
-        if not isinstance(item, h5py.Group) or "value" not in item:
-            continue
-        values = item["value"]
-        if not isinstance(values, h5py.Dataset):
-            continue
-        try:
-            # The length is in the shape; reading the array itself would pull
-            # every field of the stream off disk only to measure it.
-            size = int(values.size)
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if size > 1:
-            counts[size] = counts.get(size, 0) + 1
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
-def read_master_rois(master: Path) -> list[dict]:
-    """The detector's ROIs as recorded in the master's baseline.
-
-    Newer image files carry no ``entry/data/rois`` of their own, so this is
-    the only record of where the detector's ROIs were. The numbers are the
-    same ones the older writer put in the image file -- a corner and a size in
-    pixels -- so they come back in the same shape.
-    """
-    found: dict[tuple[str, int], dict] = {}
-    try:
-        with h5py.File(master, "r") as f:
-            group = f.get(MASTER_BASELINE_PATH)
-            if group is None:
-                return []
-            for name in group.keys():
-                match = MASTER_ROI_PATTERN.match(name)
-                if match is None:
-                    continue
-                item = group[name]
-                source = "value_start" if "value_start" in item else "value"
-                if source not in item:
-                    continue
-                try:
-                    value = float(np.asarray(item[source][()]).ravel()[0])
-                except (IndexError, TypeError, ValueError):
-                    continue
-                key = (match["detector"], int(match["number"]))
-                found.setdefault(key, {})[match["field"]] = value
-    except OSError:
-        return []
-
-    rois = []
-    for (_detector, number), parts in sorted(found.items(), key=lambda kv: kv[0][1]):
-        if not all(k in parts for k in ("min_x", "min_y", "size_x", "size_y")):
-            continue          # half a rectangle is no rectangle
-        rois.append(
-            {
-                "name": f"ROI{number}",
-                "x": parts["min_x"],
-                "y": parts["min_y"],
-                "w": max(1.0, parts["size_x"]),
-                "h": max(1.0, parts["size_y"]),
-                "angle": 0.0,
-            }
-        )
-    return rois
 
 
-def read_scan_channels(
-    image: Path, frame_epoch, n_frames: int | None = None, master: Path | None = None
-) -> dict[str, np.ndarray]:
-    """The master file's primary fields, resampled onto the image's frames.
-
-    The detector free-runs, so the two files rarely have the same number of
-    points -- 103 frames against 101 scan points is typical, the camera starting
-    a moment early. Each frame therefore takes the value of the scan point
-    nearest it in time; frames outside the scan hold the first or last point.
-
-    When the image file carries no per-frame timestamp at all, there is no
-    clock to match against, so frames are instead spread evenly across the
-    master's scan points by position (see ``_evenly_spaced_index``) -- a
-    rougher alignment, but the best available without a time base.
-    """
-    have_epoch = frame_epoch is not None and len(frame_epoch) > 0
-    if not have_epoch and not n_frames:
-        return {}
-    if master is None:
-        master = master_path_for_image(image)
-    if master is None:
-        return {}
-    try:
-        with h5py.File(master, "r") as f:
-            group = f.get(MASTER_PRIMARY_PATH)
-            if group is None:
-                return {}
-
-            if have_epoch:
-                frame_epoch = np.asarray(frame_epoch, dtype=float)
-                scan_epoch = _scan_time_base(group)
-                if scan_epoch is None:
-                    return {}
-                index = nearest_index(frame_epoch, scan_epoch)
-
-                # Refuse to pair files that do not describe the same stretch
-                # of time -- a mismatched master would otherwise be resampled
-                # into plausible-looking nonsense.
-                spacing = float(np.median(np.diff(scan_epoch))) or 1.0
-                if float(np.median(np.abs(frame_epoch - scan_epoch[index]))) > 5 * spacing:
-                    return {}
-                n_scan_points = scan_epoch.size
-            else:
-                n_scan_points = _scan_point_count(group)
-                if not n_scan_points:
-                    return {}
-                index = _evenly_spaced_index(n_frames, n_scan_points)
-
-            channels: dict[str, np.ndarray] = {}
-            for name in group.keys():
-                item = group[name]
-                if not isinstance(item, h5py.Group) or "value" not in item:
-                    continue
-                try:
-                    values = np.asarray(item["value"][()], dtype=float).ravel()
-                except (TypeError, ValueError):
-                    continue
-                if values.size == n_scan_points:
-                    channels[SCAN_PREFIX + name] = values[index]
-            return channels
-    except OSError:
-        return {}
 
 
-def is_image_file(path: Path) -> bool:
-    """Whether *path* is itself an image file (i.e. it holds an image stack)."""
-    try:
-        with h5py.File(path, "r") as f:
-            return isinstance(f.get(IMAGE_DATA_PATH), h5py.Dataset)
-    except OSError:
-        return False
 
 
-# Resolution opens the file to read its metadata, and the browser re-resolves
-# the whole selection on every selection change, so remember the answer per
-# (path, mtime, size) -- cheap locally, but worth it over a beamline mount.
-_RESOLVE_CACHE: dict[tuple, "Path | None"] = {}
 
 
-def resolve_image_file(path: Path) -> Path | None:
-    """The image file to open for *path*, which may be a master or an image file.
-
-    Selecting a ``pva*.h5`` directly in the file list is the obvious way to ask
-    for it, so that opens itself rather than hunting for a partner.
-    """
-    path = Path(path)
-    try:
-        stat = path.stat()
-        key = (str(path), stat.st_mtime, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in _RESOLVE_CACHE:
-        return _RESOLVE_CACHE[key]
-
-    resolved = image_path_for_master(path)
-    if resolved is None and is_image_file(path):
-        resolved = path
-    if key is not None:
-        _RESOLVE_CACHE[key] = resolved
-    return resolved
 
 
 # -- Reading the image file -------------------------------------------------
 
 
-class ImageData:
-    """The whole contents of one ``pva*.h5`` file, held in memory.
-
-    ``stack`` is ``(n_frames, nx, ny)`` float32 -- indexed ``[frame, x, y]``, the
-    file's own ``pixel_order='xy'`` convention, which is also what pyqtgraph's
-    default (col-major) ``ImageItem`` expects, so frames need no transposing to
-    display the right way round.
-    """
-
-    def __init__(self, path: Path, master: Path | None = None):
-        self.path = Path(path)
-        # Newer scans keep the image in a different tree from its master, so
-        # the beside-it reverse lookup no longer finds it. The caller usually
-        # knows the pair already; guessing is only the fallback.
-        self.master_path = Path(master) if master is not None else master_path_for_image(self.path)
-        with h5py.File(self.path, "r") as f:
-            dset = f.get(IMAGE_DATA_PATH)
-            if dset is None or not isinstance(dset, h5py.Dataset):
-                raise RuntimeError(
-                    f"{self.path.name} has no image stack at '{IMAGE_DATA_PATH}'."
-                )
-            if dset.ndim not in (2, 3):
-                raise RuntimeError(
-                    f"'{IMAGE_DATA_PATH}' is {dset.ndim}-dimensional; "
-                    "only 2D images and 3D stacks are supported."
-                )
-            if dset.nbytes > MAX_STACK_BYTES:
-                raise RuntimeError(
-                    f"{self.path.name} holds {dset.nbytes / 1024 ** 3:.1f} GB of image "
-                    f"data, more than this viewer loads at once "
-                    f"({MAX_STACK_BYTES / 1024 ** 3:.0f} GB)."
-                )
-            try:
-                stack = np.asarray(dset[()], dtype=np.float32)
-            except OSError as exc:
-                if not HAVE_HDF5PLUGIN:
-                    raise RuntimeError(HDF5PLUGIN_HINT) from exc
-                raise RuntimeError(f"Could not read the image stack: {exc}") from exc
-
-            if stack.ndim == 2:
-                stack = stack[np.newaxis, ...]
-            self.stack = stack
-            n_frames = stack.shape[0]
-
-            self.epoch = self._read_epoch(f, n_frames)
-            self.timestamps = (
-                None if self.epoch is None else self.epoch - self.epoch[0]
-            )
-            self.channels = self._read_channels(f, n_frames)
-            self.stored_rois = self._read_stored_rois(f)
-        if not self.stored_rois and self.master_path is not None:
-            # Nothing in the image file: newer writers leave the rectangles to
-            # the master's baseline instead.
-            self.stored_rois = read_master_rois(self.master_path)
-
-        # Offered next to the image file's own channels, on the same frames.
-        self.channels.update(
-            read_scan_channels(self.path, self.epoch, n_frames, master=self.master_path)
-        )
-
-    @property
-    def n_frames(self) -> int:
-        return int(self.stack.shape[0])
-
-    @property
-    def frame_shape(self) -> tuple[int, int]:
-        return int(self.stack.shape[1]), int(self.stack.shape[2])
-
-    @staticmethod
-    def _read_epoch(f: h5py.File, n_frames: int) -> np.ndarray | None:
-        """Absolute frame times, needed to line the frames up with the scan."""
-        item = f.get(FRAME_TIMESTAMP_PATH)
-        if item is None:
-            return None
-        stamps = np.asarray(item[()], dtype=float).ravel()
-        if stamps.size != n_frames or stamps.size == 0:
-            return None
-        return stamps
-
-    @staticmethod
-    def _read_channels(f: h5py.File, n_frames: int) -> dict[str, np.ndarray]:
-        """Per-frame scalar channels (the CA metadata), keyed by name."""
-        channels: dict[str, np.ndarray] = {}
-        for group_path in CA_GROUP_PATHS:
-            group = f.get(group_path)
-            if not isinstance(group, h5py.Group):
-                continue
-            for name in group.keys():
-                if name in channels:
-                    continue
-                item = group.get(name)
-                if not isinstance(item, h5py.Dataset):
-                    continue
-                try:
-                    values = np.asarray(item[()], dtype=float).ravel()
-                except (OSError, TypeError, ValueError):
-                    continue
-                if values.size == n_frames:
-                    channels[name] = values
-        return channels
-
-    @staticmethod
-    def _read_stored_rois(f: h5py.File) -> list[dict]:
-        """The rectangles saved in ``entry/data/rois`` (x/y/w/h attributes)."""
-        group = f.get(ROI_GROUP_PATH)
-        if not isinstance(group, h5py.Group):
-            return []
-        rois = []
-        for name in sorted(group.keys()):
-            item = group.get(name)
-            if not isinstance(item, h5py.Dataset):
-                continue  # e.g. the 'info' subgroup
-            attrs = item.attrs
-            if not all(key in attrs for key in ("x", "y", "w", "h")):
-                continue
-            rois.append(
-                {
-                    "name": str(name),
-                    "x": float(attrs["x"]),
-                    "y": float(attrs["y"]),
-                    "w": max(1.0, float(attrs["w"])),
-                    "h": max(1.0, float(attrs["h"])),
-                    "angle": float(attrs.get("angle", 0.0)),
-                }
-            )
-        return rois
 
 
 # -- Metrics ----------------------------------------------------------------

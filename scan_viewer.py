@@ -64,6 +64,48 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pyqtgraph as pg
+
+# Moved into da6idb; re-exported for the rest of this module and its callers.
+from da6idb.files import (
+    HDF_SUFFIXES,
+    file_prefix,
+    list_hdf_files,
+    scan_number,
+)
+
+# Moved into da6idb; re-exported for the rest of this module and its callers.
+from da6idb.scan import (
+    BASELINE_PATH,
+    EPOCH_FIELD,
+    INDEX_FIELD,
+    METADATA_PATH,
+    PRIMARY_PATH,
+    PSIC_HKL_FIELDS,
+    _SCAN_HKL_CACHE,
+    _SCAN_INFO_CACHE,
+    _as_text,
+    _build_grid,
+    _epoch_source,
+    _grid_axis_candidates,
+    _half_max_crossing,
+    _is_time_like,
+    _meta_text,
+    _primary_point_count,
+    _scalarize,
+    _yaml_items,
+    axis_edges,
+    curve_stats,
+    default_x_field,
+    format_scan_hkl,
+    grid_stats,
+    read_baseline,
+    read_grid,
+    read_primary,
+    read_scan_info,
+    scan_hkl,
+    scan_x_field,
+    stream_fields,
+)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
@@ -73,16 +115,6 @@ from PyQt5 import QtWidgets
 from image_viewer import ImageViewerWindow
 from image_viewer import resolve_image_file
 
-PRIMARY_PATH = "entry/instrument/bluesky/streams/primary"
-METADATA_PATH = "entry/instrument/bluesky/metadata"
-# Offered alongside the real fields: each primary field carries its own EPOCH
-# (seconds past the UNIX epoch, one per scan point), so absolute time can be an
-# axis like anything else.
-EPOCH_FIELD = "EPOCH"
-# A plain 0, 1, 2 ... down the scan. A count plan moves nothing, so it has no
-# motor to plot against and the fallback would otherwise settle on whichever
-# motor happens to sort last -- a flat line at wherever it was parked.
-INDEX_FIELD = "INDEX"
 
 # Curves are drawn with pyqtgraph, which defaults to a black canvas; the rest
 # of this window is light, and so is the matplotlib grid plot beside it.
@@ -115,8 +147,6 @@ CURVE_COLORS = (
     "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
     "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f",
 )
-BASELINE_PATH = "entry/instrument/bluesky/streams/baseline"
-HDF_SUFFIXES = (".hdf", ".h5", ".hdf5")
 FILE_COLUMNS = ["Scan", "Img", "Plan", "Motor", "Range", "Pts", "Count [s]"]
 # Starting widths. Every column is user-resizable from here; the motor name is
 # the one that can run long, so it starts wide and is elided rather than
@@ -129,562 +159,57 @@ FIELD_COLUMNS = ["Field", "X", "Y", "Norm"]
 FIELD_X, FIELD_Y, FIELD_NORM = 1, 2, 3
 
 
-def list_hdf_files(directory: Path) -> list[Path]:
-    """Return the HDF5 files directly inside *directory*, sorted by name."""
-    return sorted(
-        p
-        for p in directory.iterdir()
-        if p.is_file() and p.suffix.lower() in HDF_SUFFIXES
-    )
-
-
-def _is_time_like(name: str) -> bool:
-    return "time" in name.lower() or name == EPOCH_FIELD
-
-
-def stream_fields(path: Path, stream: str) -> list[str]:
-    """Field names under *stream* that carry a ``value`` dataset.
-
-    h5py iterates group keys in name order (no ``track_order`` here), so this
-    is also the order ``default_x_field`` treats as "last".
-    """
-    try:
-        with h5py.File(path, "r") as f:
-            group = f.get(f"entry/instrument/bluesky/streams/{stream}")
-            if group is None:
-                return []
-            names = [
-                name
-                for name in group.keys()
-                if isinstance(group[name], h5py.Group) and "value" in group[name]
-            ]
-            if _epoch_source(group) is not None:
-                names.append(EPOCH_FIELD)
-            if names:
-                # Last, so default_x_field reaches for it before any parked
-                # motor when the scan itself names none.
-                names.append(INDEX_FIELD)
-            return names
-    except OSError:
-        return []
-
-
-def _epoch_source(group) -> str | None:
-    """The field whose EPOCH stands for the scan's clock.
-
-    Every field records its own EPOCH and they disagree by a few seconds --
-    each device is stamped when it was read -- so one has to be picked. The
-    first in the group's (alphabetical) order is used, consistently, rather
-    than silently mixing time bases between axes.
-    """
-    for name in group.keys():
-        item = group[name]
-        if isinstance(item, h5py.Group) and "EPOCH" in item:
-            return name
-    return None
-
-
-def default_x_field(fields: list[str]) -> str | None:
-    """The last field, skipping trailing time-like ones (e.g. ``scaler_time``).
-
-    Only a fallback: :func:`scan_x_field` asks the scan what it moved.
-    """
-    for name in reversed(fields):
-        if not _is_time_like(name):
-            return name
-    return fields[-1] if fields else None
-
-
-def scan_x_field(path: Path, fields: list[str]) -> str | None:
-    """The field to plot against: the motor this scan actually moved.
-
-    Taken from the ``motors`` metadata rather than guessed from the field
-    ordering, and preferring the motor's readback over its setpoint. Returns
-    ``None`` when the scan names no motor that was recorded.
-    """
-    for motor in read_scan_info(path)["motors"]:
-        for candidate in (motor, f"{motor}_user_setpoint", f"{motor}_setpoint"):
-            if candidate in fields:
-                return candidate
-    return None
-
-
-def scan_number(path: Path) -> str:
-    """The scan number in a file name: ``00008`` from ``tise2_2_00008_master.hdf``.
-
-    The last run of digits wins, so the prefix's own digits (``tise2_2``) are
-    ignored and the sibling ``pva_tise2_2_00008.h5`` reports the same number.
-    """
-    stem = path.stem
-    if stem.endswith("_master"):
-        stem = stem[: -len("_master")]
-    digits = re.findall(r"\d+", stem)
-    return digits[-1] if digits else stem
-
-
-def file_prefix(path: Path) -> str:
-    """The part of a file name in front of the scan number: ``tise2_2``.
-
-    Everything from the scan number onwards is dropped, so the files of one
-    series all reduce to the same string.
-    """
-    stem = path.stem
-    if stem.endswith("_master"):
-        stem = stem[: -len("_master")]
-    digits = list(re.finditer(r"\d+", stem))
-    if not digits:
-        return stem
-    return stem[: digits[-1].start()].rstrip("_-. ") or stem
-
-
-def _as_text(value) -> str:
-    """An h5py scalar -- bytes, numpy scalar or 0-d array -- as plain text."""
-    value = np.asarray(value).reshape(-1)
-    if value.size == 0:
-        return ""
-    item = value[0]
-    return item.decode(errors="replace") if isinstance(item, bytes) else str(item)
-
-
-def _meta_text(group, key: str) -> str:
-    item = group.get(key)
-    return "" if item is None else _as_text(item[()])
-
-
-def _yaml_items(text: str) -> list[str]:
-    """The entries of a simple YAML block sequence (``- name`` per line).
-
-    ``motors`` and ``detectors`` are stored as YAML text (``motors`` even keeps a
-    ``!!python/tuple`` tag), so pull the items out directly rather than take a
-    PyYAML dependency for two one-line lists.
-    """
-    return [
-        line[2:].strip().strip("'\"")
-        for line in text.splitlines()
-        if line.startswith("- ")
-    ]
-
-
-# Reading this opens the file, and the browser re-reads the whole selection on
-# every selection change, so remember it per (path, mtime, size).
-# The diffractometer's own reading of where it was pointing, per scan point.
-# Older scans do not record it.
-PSIC_HKL_FIELDS = ("psic_h", "psic_k", "psic_l")
-
-_SCAN_HKL_CACHE: dict[tuple, tuple | None] = {}
-_SCAN_INFO_CACHE: dict[tuple, dict] = {}
-
-
-def scan_hkl(path: Path):
-    """Mean and spread of psic_h/k/l over the scan, or None if not recorded.
-
-    The spread matters as much as the mean: on a rocking curve one of the three
-    sweeps across the peak while the others hold still, and a bare average
-    would read like a fixed position.
-    """
-    path = Path(path)
-    try:
-        stat = path.stat()
-        key = (str(path), stat.st_mtime, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in _SCAN_HKL_CACHE:
-        return _SCAN_HKL_CACHE[key]
-
-    result = None
-    if set(PSIC_HKL_FIELDS) <= set(stream_fields(path, "primary")):
-        try:
-            data = read_primary(path, list(PSIC_HKL_FIELDS))
-        except OSError:
-            data = {}
-        gathered = []
-        for name in PSIC_HKL_FIELDS:
-            values = np.asarray(data.get(name, ()), dtype=float).ravel()
-            values = values[np.isfinite(values)]
-            if values.size == 0:
-                gathered = []
-                break
-            gathered.append((float(values.mean()), float(values.std())))
-        result = tuple(gathered) if gathered else None
-    if key is not None:
-        _SCAN_HKL_CACHE[key] = result
-    return result
-
-
-def format_scan_hkl(values, decimals: int = 4) -> str:
-    """``H 1.0135  K -0.4926 ± 0.0386  L 7.4840`` for one scan."""
-    smallest = 0.5 * 10.0 ** (-decimals)
-    parts = []
-    for name, (mean, spread) in zip("HKL", values):
-        text = f"{name} {mean:.{decimals}f}"
-        if spread >= smallest:
-            text += f" ± {spread:.{decimals}f}"
-        parts.append(text)
-    return "   ".join(parts)
-
-
-def read_scan_info(path: Path) -> dict:
-    """What the scan was: plan, points, motors and the range they covered.
-
-    The motor names come from the ``motors`` metadata, and each one's actual
-    travel is read back from its own field in the primary stream -- the
-    requested range in ``plan_args`` is not necessarily what the motor did.
-    """
-    path = Path(path)
-    try:
-        stat = path.stat()
-        key = (str(path), stat.st_mtime, stat.st_size)
-    except OSError:
-        key = None
-    if key is not None and key in _SCAN_INFO_CACHE:
-        return _SCAN_INFO_CACHE[key]
-
-    info = {
-        "file": path.name,
-        "is_scan": False,
-        "plan": "",
-        "points": "",
-        "motors": [],
-        "shape": [],
-        "detectors": [],
-        "ranges": [],          # (motor, first, last, n)
-        "count_time": None,
-        "started": "",
-        "plan_args": "",
-        "uid": "",
-    }
-    try:
-        with h5py.File(path, "r") as f:
-            meta = f.get(METADATA_PATH)
-            if meta is not None:
-                info["is_scan"] = True
-                info["plan"] = _meta_text(meta, "plan_name")
-                info["points"] = _meta_text(meta, "num_points")
-                info["motors"] = _yaml_items(_meta_text(meta, "motors"))
-                # grid_scan records the raster size here; a 1-D plan has none.
-                info["shape"] = [
-                    int(n) for n in _yaml_items(_meta_text(meta, "shape"))
-                    if n.lstrip("-").isdigit()
-                ]
-                info["detectors"] = _yaml_items(_meta_text(meta, "detectors"))
-                info["plan_args"] = _meta_text(meta, "plan_args")
-                info["uid"] = _meta_text(meta, "run_start_uid")
-
-            primary = f.get(PRIMARY_PATH)
-            if primary is not None:
-                for motor in info["motors"]:
-                    sub = primary.get(motor)
-                    if sub is None or "value" not in sub:
-                        continue
-                    values = np.asarray(sub["value"][()], dtype=float).ravel()
-                    if values.size:
-                        info["ranges"].append(
-                            (motor, float(values[0]), float(values[-1]), int(values.size))
-                        )
-                counter = primary.get("scaler_time")
-                if counter is not None and "value" in counter:
-                    seconds = np.asarray(counter["value"][()], dtype=float).ravel()
-                    if seconds.size:
-                        info["count_time"] = float(seconds[0])
-                for name in primary:
-                    field = primary[name]
-                    stamp = field.get("time") if isinstance(field, h5py.Group) else None
-                    if stamp is not None and "start_time_iso" in stamp.attrs:
-                        info["started"] = _as_text(stamp.attrs["start_time_iso"])[:19]
-                        break
-    except OSError:
-        pass
-
-    if key is not None:
-        _SCAN_INFO_CACHE[key] = info
-    return info
-
-
-def _grid_axis_candidates(available: list[str], motor: str) -> list[str]:
-    """Fields that could supply this motor's grid axis, best first.
-
-    The readback comes first, because it is where the motor actually was. It is
-    only usable when every row repeats its coordinates exactly, which a readback
-    that wanders by a few counts will not; the ``*_user_setpoint`` companion
-    holds the demanded value and always does. :func:`read_grid` tries them in
-    this order and keeps the first that reconstructs a raster.
-    """
-    names = (motor, f"{motor}_user_setpoint", f"{motor}_setpoint")
-    return [name for name in names if name in available]
-
-
-def _build_grid(slow, fast, values, shape, slow_name, fast_name) -> dict | None:
-    """Lay *values* onto the raster described by the two axis arrays, or ``None``."""
-    n_points = min(len(slow), len(fast), len(values))
-    if n_points < 4:
-        return None
-    slow, fast, values = slow[:n_points], fast[:n_points], values[:n_points]
-
-    # return_inverse gives each point's row/column straight off, so a snaked
-    # raster (alternate rows reversed) lands in the right place unaided.
-    y_axis, rows = np.unique(slow, return_inverse=True)
-    x_axis, columns = np.unique(fast, return_inverse=True)
-    if len(x_axis) < 2 or len(y_axis) < 2:
-        return None
-
-    complete = len(x_axis) * len(y_axis) == n_points
-    # A scan stopped part way has fewer rows than were asked for, so compare
-    # against the declared raster rather than expecting a full rectangle: the
-    # fast axis must be the declared width, the slow axis no taller.
-    declared = (
-        len(shape) == 2 and len(x_axis) == shape[1] and len(y_axis) <= shape[0]
-    )
-    if not (complete or declared):
-        return None
-
-    grid = np.full((len(y_axis), len(x_axis)), np.nan)
-    grid[rows, columns] = values
-    return {
-        "x_name": fast_name,
-        "y_name": slow_name,
-        "x": x_axis,
-        "y": y_axis,
-        "z": grid,
-        "points": n_points,
-    }
-
-
-def read_grid(
-    path: Path, value_field: str, monitor_field: str = ""
-) -> dict | None:
-    """*value_field* laid out over a two-motor grid scan, or ``None``.
-
-    ``None`` means "not a raster": a two-motor ``inner_product`` scan moves both
-    motors together, so its axes have as many levels as there are points and the
-    product test in :func:`_build_grid` fails, which is exactly what tells the
-    two plans apart without relying on the plan name.
-    """
-    info = read_scan_info(path)
-    if len(info["motors"]) != 2:
-        return None
-
-    available = stream_fields(path, "primary")
-    slow_options = _grid_axis_candidates(available, info["motors"][0])
-    fast_options = _grid_axis_candidates(available, info["motors"][1])
-    if not slow_options or not fast_options or value_field not in available:
-        return None
-
-    wanted = set(slow_options) | set(fast_options) | {value_field}
-    if monitor_field:
-        wanted.add(monitor_field)
-    try:
-        data = read_primary(path, list(wanted))
-    except OSError:
-        return None
-    if value_field not in data:
-        return None
-
-    values = data[value_field]
-    monitor = data.get(monitor_field) if monitor_field else None
-    if monitor is not None:
-        length = min(len(values), len(monitor))
-        with np.errstate(divide="ignore", invalid="ignore"):
-            values = np.where(
-                monitor[:length] != 0, values[:length] / monitor[:length], np.nan
-            )
-
-    # Readback first, setpoint only if the readback will not form a raster.
-    for slow_name in slow_options:
-        for fast_name in fast_options:
-            if slow_name not in data or fast_name not in data:
-                continue
-            grid = _build_grid(
-                data[slow_name], data[fast_name], values,
-                info["shape"], slow_name, fast_name,
-            )
-            if grid is not None:
-                return grid
-    return None
-
-
-def axis_edges(values: np.ndarray) -> np.ndarray:
-    """Cell boundaries around the grid's sample positions.
-
-    Midway between neighbours, with the outer two extended by half their own
-    spacing, so uneven steps keep their proportions.
-    """
-    v = np.asarray(values, dtype=float)
-    if v.size == 1:
-        return np.array([v[0] - 0.5, v[0] + 0.5])
-    middles = (v[1:] + v[:-1]) / 2.0
-    return np.concatenate(([2 * v[0] - middles[0]], middles, [2 * v[-1] - middles[-1]]))
-
-
-def grid_stats(grid: dict) -> dict[str, float | None]:
-    """Max/min of a grid and the (x, y) they sit at."""
-    z = grid["z"]
-    stats = {"max_z": None, "max_at": None, "min_z": None, "min_at": None}
-    if not np.any(np.isfinite(z)):
-        return stats
-    flat_max = int(np.nanargmax(z))
-    flat_min = int(np.nanargmin(z))
-    for key, flat in (("max", flat_max), ("min", flat_min)):
-        row, column = np.unravel_index(flat, z.shape)
-        stats[f"{key}_z"] = float(z[row, column])
-        stats[f"{key}_at"] = (float(grid["x"][column]), float(grid["y"][row]))
-    return stats
-
-
-def _primary_point_count(group) -> int | None:
-    """How many points the stream has: the most common length among its fields.
-
-    Read off each dataset's shape rather than its contents, and by majority
-    because a few fields (read-once presets and the like) are a different
-    length from the scan.
-    """
-    counts: dict[int, int] = {}
-    for name in group.keys():
-        item = group[name]
-        if not isinstance(item, h5py.Group) or "value" not in item:
-            continue
-        values = item["value"]
-        if not isinstance(values, h5py.Dataset):
-            continue
-        try:
-            size = int(values.size)
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if size >= 1:
-            counts[size] = counts.get(size, 0) + 1
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda kv: kv[1])[0]
-
-
-def read_primary(path: Path, fields: list[str]) -> dict[str, np.ndarray]:
-    """Read the ``value`` array of each of *fields* from the primary stream."""
-    out: dict[str, np.ndarray] = {}
-    with h5py.File(path, "r") as f:
-        group = f.get(PRIMARY_PATH)
-        if group is None:
-            return out
-        epoch_source = _epoch_source(group)
-        for name in fields:
-            if name == INDEX_FIELD:
-                count = _primary_point_count(group)
-                if count:
-                    out[name] = np.arange(count, dtype=float)
-                continue
-            if name == EPOCH_FIELD:
-                if epoch_source is not None:
-                    out[name] = np.asarray(
-                        group[epoch_source]["EPOCH"][()], dtype=float
-                    )
-                continue
-            item = group.get(name)
-            if item is not None and "value" in item:
-                out[name] = np.asarray(item["value"][()], dtype=float)
-    return out
-
-
-def _scalarize(value: np.ndarray):
-    """Return a plain float for a numeric size-1 array, else a short text summary.
-
-    Some baseline fields are waveform-valued (e.g. a UB matrix or a
-    pixel-center pair) rather than scalar, so ``value_start``/``value_end``
-    are not always convertible with a bare ``float()``. Others are size-1
-    but string-valued (e.g. a motor direction like ``b"y-"``), which
-    ``float()`` also rejects.
-    """
-    value = np.asarray(value)
-    if value.size == 1:
-        item = value.reshape(-1)[0]
-        if isinstance(item, bytes):
-            return item.decode(errors="replace")
-        try:
-            return float(item)
-        except (TypeError, ValueError):
-            return str(item)
-    return f"array{value.shape}: {np.array2string(value, precision=4, threshold=6)}"
-
-
-def read_baseline(path: Path) -> dict[str, tuple[object, object]]:
-    """Return ``{field: (before, after)}`` from the baseline stream.
-
-    ``before``/``after`` are ``float`` for a scalar field, or a text summary
-    for an array-valued one (see :func:`_scalarize`).
-    """
-    out: dict[str, tuple[object, object]] = {}
-    with h5py.File(path, "r") as f:
-        group = f.get(BASELINE_PATH)
-        if group is None:
-            return out
-        for name in group.keys():
-            sub = group[name]
-            if not isinstance(sub, h5py.Group):
-                continue
-            if "value_start" in sub and "value_end" in sub:
-                before = _scalarize(sub["value_start"][()])
-                after = _scalarize(sub["value_end"][()])
-            elif "value" in sub and sub["value"].shape and sub["value"].shape[0] >= 2:
-                value = np.asarray(sub["value"][()])
-                before, after = _scalarize(value[0]), _scalarize(value[-1])
-            else:
-                continue
-            out[name] = (before, after)
-    return out
-
-
-def _half_max_crossing(
-    x: np.ndarray, y: np.ndarray, half: float, start: int, stop: int, step: int
-) -> float | None:
-    """Linearly-interpolated X where *y* first crosses *half*, walking from
-    *start* to (but not including) *stop* in steps of *step*."""
-    i = start
-    while i != stop:
-        j = i + step
-        yi, yj = y[i], y[j]
-        if yi == half:
-            return x[i]
-        if (yi > half) != (yj > half):
-            frac = (half - yi) / (yj - yi)
-            return x[i] + frac * (x[j] - x[i])
-        i = j
-    return None
-
-
-def curve_stats(x: np.ndarray, y: np.ndarray) -> dict[str, float | None]:
-    """Max/min (with position), and FWHM center/width, for one plotted curve.
-
-    ``center``/``fwhm`` come from linearly-interpolated crossings of the
-    half-max level (halfway between the curve's min and max) either side of
-    the peak -- the same convention tools like SPEC's peak search use --
-    rather than a fit, so they are ``None`` when the peak sits at an end of
-    the data (no crossing on that side).
-    """
-    x = np.asarray(x, dtype=float)
-    y = np.asarray(y, dtype=float)
-    finite = np.isfinite(x) & np.isfinite(y)
-    x, y = x[finite], y[finite]
-
-    stats: dict[str, float | None] = {
-        "max_y": None,
-        "max_x": None,
-        "min_y": None,
-        "min_x": None,
-        "center": None,
-        "fwhm": None,
-    }
-    if x.size == 0:
-        return stats
-
-    imax = int(np.argmax(y))
-    imin = int(np.argmin(y))
-    stats["max_y"], stats["max_x"] = y[imax], x[imax]
-    stats["min_y"], stats["min_x"] = y[imin], x[imin]
-
-    half = (y[imax] + y[imin]) / 2.0
-    left = _half_max_crossing(x, y, half, imax, 0, -1)
-    right = _half_max_crossing(x, y, half, imax, len(x) - 1, 1)
-    if left is not None and right is not None:
-        stats["center"] = (left + right) / 2.0
-        stats["fwhm"] = abs(right - left)
-    return stats
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class HdfViewer(QtWidgets.QMainWindow):
