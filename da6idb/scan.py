@@ -44,6 +44,24 @@ def _yaml_items(text: str) -> list[str]:
         if line.startswith("- ")
     ]
 
+
+def _yaml_block(text: str, key: str) -> str:
+    """The body under ``key:`` in a simple YAML mapping, as text.
+
+    ``hints`` holds several sections in one blob, so :func:`_yaml_items` cannot
+    be pointed at the whole thing -- it would collect the list items of every
+    section at once. The body runs until the next key at column zero.
+    """
+    out, inside = [], False
+    for line in text.splitlines():
+        if inside:
+            if not line.strip() or line[:1] not in (" ", "-"):
+                break
+            out.append(line)
+        elif line.strip() == f"{key}:":
+            inside = True
+    return "\n".join(out)
+
 def _half_max_crossing(
     x: np.ndarray, y: np.ndarray, half: float, start: int, stop: int, step: int
 ) -> float | None:
@@ -311,6 +329,118 @@ def read_scan_info(path: Path) -> dict:
     if key is not None:
         _SCAN_INFO_CACHE[key] = info
     return info
+
+
+# A counter channel is named by whoever wired it up ("Ion_Chamber_1"), so the
+# name alone says nothing. The PV it was read from does: these are the EPICS
+# motor-record and ophyd pseudo-positioner suffixes, and nothing that merely
+# counts carries one.
+_POSITIONER_SUFFIXES = (".RBV", ".VAL", ".position", ".target")
+
+
+def _field_device(name: str, devices: list[str]) -> str:
+    """The configured device a field name was prefixed with, if any."""
+    best = ""
+    for device in devices:
+        if (name == device or name.startswith(f"{device}_")) and len(device) > len(best):
+            best = device
+    return best
+
+
+def describe_fields(path: Path, stream: str = "primary") -> list[dict]:
+    """Every field in *stream*, with what it is and the range it covered.
+
+    This answers the question you have in front of an unfamiliar scan: which
+    name goes in as x, as y, as the monitor. Nothing here is guessed from the
+    name -- *role* comes from the plan's own ``motors`` list, the
+    ``signal_type`` each field group carries and the PV it was read from, and
+    *hinted* marks the detector the plan itself nominated in ``hints``.
+
+    Returns one dict per field, the motor the scan moved first and the fields
+    that never moved last.
+    """
+    path = Path(path)
+    names = stream_fields(path, stream)
+    if not names:
+        return []
+    info = read_scan_info(path)
+    scanned = set(info.get("motors") or [])
+    detectors = list(info.get("detectors") or [])
+
+    hinted: set[str] = set()
+    attrs: dict[str, tuple[str, str, str]] = {}
+    try:
+        with h5py.File(path, "r") as f:
+            meta = f.get(METADATA_PATH)
+            if meta is not None:
+                hints = _meta_text(meta, "hints")
+                hinted = set(_yaml_items(_yaml_block(hints, "detectors")))
+            group = f.get(f"entry/instrument/bluesky/streams/{stream}")
+            for name in names:
+                sub = group.get(name) if group is not None else None
+                if not isinstance(sub, h5py.Group) or "value" not in sub:
+                    continue
+                attrs[name] = (
+                    _as_text(sub.attrs.get("signal_type", "")),
+                    _as_text(sub["value"].attrs.get("units", "")),
+                    _as_text(sub["value"].attrs.get("source", "")),
+                )
+    except OSError:
+        pass
+
+    values = read_primary(path, names) if stream == "primary" else {}
+
+    rows = []
+    for name in names:
+        signal, units, source = attrs.get(name, ("", "", ""))
+        if name == INDEX_FIELD:
+            role = "index"
+        elif _is_time_like(name):
+            role = "time"
+        elif name in scanned:
+            role = "scanned"
+        elif source.endswith(_POSITIONER_SUFFIXES):
+            role = "positioner"
+        elif signal:
+            role = signal
+        elif _field_device(name, detectors):
+            role = "detector"
+        else:
+            role = "other"
+        row = {
+            "field": name,
+            "role": role,
+            "hinted": name in hinted,
+            "units": units,
+            "varies": None,
+            "min": None,
+            "max": None,
+            "source": source,
+        }
+        column = values.get(name)
+        if column is not None and column.ndim == 1 and column.size:
+            try:
+                numbers = np.asarray(column, dtype=float)
+            except (TypeError, ValueError):
+                numbers = None
+            if numbers is not None and np.isfinite(numbers).any():
+                low, high = float(np.nanmin(numbers)), float(np.nanmax(numbers))
+                row.update(varies=bool(high > low), min=low, max=high)
+        rows.append(row)
+
+    def order(row):
+        if row["role"] == "scanned":
+            rank = 0
+        elif row["hinted"]:
+            rank = 1
+        elif row["varies"]:
+            rank = 2
+        else:
+            rank = 3
+        return (rank, row["field"])
+
+    rows.sort(key=order)
+    return rows
 
 def default_x_field(fields: list[str]) -> str | None:
     """The last field, skipping trailing time-like ones (e.g. ``scaler_time``).

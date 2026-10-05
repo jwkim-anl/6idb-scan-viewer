@@ -100,3 +100,41 @@ def test_example_master_values():
     data = sv.read_primary(EXAMPLE_MASTER, ["psic_eta", "lambda250k_stats1_total"])
     check("scan/example_curve_stats",
           sv.curve_stats(data["psic_eta"], data["lambda250k_stats1_total"]))
+
+
+def test_describe_fields_says_what_each_field_is():
+    """The table you read before choosing x, y and the monitor."""
+    with Sandbox() as d:
+        path = write_master(d / "s_00007_master.hdf", points=9,
+                            extra_primary={"psic_h": np.full(9, 1.5)})
+        rows = sv.describe_fields(path)
+        check("scan/describe_rows", rows)
+        # the motor first, the detector the plan nominated next
+        assert [r["field"] for r in rows][:2] == ["psic_eta",
+                                                  "lambda250k_stats1_total"]
+        roles = {r["field"]: r["role"] for r in rows}
+        assert roles["psic_eta"] == "scanned"        # from the motors metadata
+        assert roles["Ion_Chamber_1"] == "detector"  # from its signal_type
+        assert roles["psic_h"] == "positioner"       # from its PV suffix
+        assert roles["scaler_time"] == "time"
+        assert roles["INDEX"] == "index"
+        hinted = [r["field"] for r in rows if r["hinted"]]
+        assert hinted == ["lambda250k_stats1_total"]
+        still = [r["field"] for r in rows if r["varies"] is False]
+        assert "Ion_Chamber_1" in still and "psic_h" in still
+
+
+def test_describe_fields_survives_a_file_with_no_stream():
+    with Sandbox() as d:
+        path = write_master(d / "s_00007_master.hdf", points=5)
+        assert sv.describe_fields(path, "baseline_does_not_exist") == []
+
+
+def test_yaml_block_takes_one_section_of_the_hints():
+    text = ("detectors:\n- a_total\n- Ion Chamber 4\n"
+            "dimensions:\n- !!python/tuple\n  - - psic_eta\n  - primary\n"
+            "monitor: Time\n")
+    assert sv._yaml_items(sv._yaml_block(text, "detectors")) == [
+        "a_total", "Ion Chamber 4"]
+    # without the split, every list item in the blob would come back at once
+    assert len(sv._yaml_items(text)) > 2

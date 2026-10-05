@@ -44,11 +44,31 @@ def have_example() -> bool:
 # -- building files that look like the real ones ----------------------------
 
 
+# What the real files put on each field, and what describe_fields reads to
+# tell a motor readback from a counter channel.
+FIELD_ATTRS = {
+    "lambda250k_stats1_total": {"source": "PV:s6lambda1:Stats1:Total_RBV"},
+    "Ion_Chamber_1": {"signal_type": "detector", "source": "PV:6idb1:scaler1.S2"},
+    "scaler_time": {"source": "PV:6idb1:scaler1.T"},
+    "psic_eta": {"units": "degrees", "source": "PV:6idb1:m17.RBV"},
+    "psic_chi": {"units": "degrees", "source": "PV:6idb1:m19.RBV"},
+    "psic_h": {"source": "PY:psic_h.position"},
+}
+
+HINTS = "detectors:\n- lambda250k_stats1_total\nmonitor: Time\nscan_type: ascan\n"
+
+
 def _stream_field(group, name, values, epoch):
     item = group.create_group(name)
-    item.create_dataset("value", data=np.asarray(values))
+    value = item.create_dataset("value", data=np.asarray(values))
     item.create_dataset("time", data=np.asarray(epoch) - epoch[0])
     item.create_dataset("EPOCH", data=np.asarray(epoch))
+    attrs = FIELD_ATTRS.get(name, {})
+    if "signal_type" in attrs:
+        item.attrs["signal_type"] = attrs["signal_type"]
+    for key in ("units", "source"):
+        if key in attrs:
+            value.attrs[key] = attrs[key]
 
 
 def _baseline_field(group, name, value):
@@ -104,6 +124,7 @@ def write_master(
         motor_yaml = "!!python/tuple\n" + "".join(f"- {m}\n" for m in motors)
         meta.create_dataset("motors", data=np.bytes_(motor_yaml))
         meta.create_dataset("detectors", data=np.bytes_("- lambda250k\n"))
+        meta.create_dataset("hints", data=np.bytes_(HINTS))
         for name, value in (metadata or {}).items():
             meta.create_dataset(name, data=np.bytes_(value))
     return path

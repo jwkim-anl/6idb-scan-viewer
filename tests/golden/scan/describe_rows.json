@@ -1,0 +1,72 @@
+[
+ {
+  "field": "psic_eta",
+  "hinted": false,
+  "max": 11.0,
+  "min": 10.0,
+  "role": "scanned",
+  "source": "PV:6idb1:m17.RBV",
+  "units": "degrees",
+  "varies": true
+ },
+ {
+  "field": "lambda250k_stats1_total",
+  "hinted": true,
+  "max": 1000.0,
+  "min": 28.5655007846,
+  "role": "detector",
+  "source": "PV:s6lambda1:Stats1:Total_RBV",
+  "units": "",
+  "varies": true
+ },
+ {
+  "field": "EPOCH",
+  "hinted": false,
+  "max": 1790000008.0,
+  "min": 1790000000.0,
+  "role": "time",
+  "source": "",
+  "units": "",
+  "varies": true
+ },
+ {
+  "field": "INDEX",
+  "hinted": false,
+  "max": 8.0,
+  "min": 0.0,
+  "role": "index",
+  "source": "",
+  "units": "",
+  "varies": true
+ },
+ {
+  "field": "Ion_Chamber_1",
+  "hinted": false,
+  "max": 2.0,
+  "min": 2.0,
+  "role": "detector",
+  "source": "PV:6idb1:scaler1.S2",
+  "units": "",
+  "varies": false
+ },
+ {
+  "field": "psic_h",
+  "hinted": false,
+  "max": 1.5,
+  "min": 1.5,
+  "role": "positioner",
+  "source": "PY:psic_h.position",
+  "units": "",
+  "varies": false
+ },
+ {
+  "field": "scaler_time",
+  "hinted": false,
+  "max": 0.1,
+  "min": 0.1,
+  "role": "time",
+  "source": "PV:6idb1:scaler1.T",
+  "units": "",
+  "varies": false
+ }
+]
