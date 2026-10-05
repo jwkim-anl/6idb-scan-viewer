@@ -104,12 +104,14 @@ both draw themselves. A grid made in a notebook is the same cached `.vti` the
 viewers read, so it opens in either.
 
 `examples/getting-started.ipynb` walks through all of it against the scan that
-ships with this repository. **[`docs/api.md`](docs/api.md)** lists every public
+ships with this repository. It adds the repository root to `sys.path` if the
+package is not installed, so it runs from a fresh clone either way. **[`docs/api.md`](docs/api.md)** lists every public
 function, generated from the source.
 
 ### Installing
 
 ```bash
+pip install -e . --no-deps       # just the package, touching nothing else
 pip install -e .                 # reading and reducing: numpy, h5py, scipy
 pip install -e ".[notebook]"     # + pandas and xarray, for da6idb.session
 pip install -e ".[hkl]"          # + xrayutilities and pyvista, for reciprocal space
