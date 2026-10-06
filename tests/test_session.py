@@ -222,42 +222,44 @@ def test_show_names_the_rois_it_draws():
             recorded[0], "new"]
 
 
-def test_delta_angles_per_frame_and_averaged():
+
+def test_two_theta_per_frame_and_averaged():
     with Sandbox() as d:
         write_master(d / "s_00007_master.hdf", points=9)
         write_image(d / "pva_s_00007.h5", frames=9, shape=(16, 16))
         images = da6idb.open_folder(d)[7].images()
         spot = (2, 3, 6, 6)
-        per_frame = images.delta_angles(spot)
+        per_frame = images.two_theta_angles(spot)
         assert len(per_frame) == images.n_frames
         assert per_frame.index.name == "frame"
         # the plain mean is the mean; the weighted one is a weighted mean
-        assert np.isclose(images.delta_angle(spot, weight=None),
-                          per_frame.mean())
+        assert np.isclose(images.two_theta(spot, weight=None), per_frame.mean())
         weights = images.roi_series(spot)["sum"].to_numpy(dtype=float)
-        assert np.isclose(images.delta_angle(spot),
+        assert np.isclose(images.two_theta(spot),
                           np.average(per_frame.to_numpy(), weights=weights))
         # None is the whole detector, which is just a big rectangle
-        assert len(images.delta_angles(None)) == images.n_frames
+        assert len(images.two_theta_angles(None)) == images.n_frames
         try:
-            images.delta_angle(spot, weight="nonsense")
+            images.two_theta(spot, weight="nonsense")
         except ValueError as error:
             assert "weight must be" in str(error)
         else:
             raise AssertionError("should have refused")
 
 
-def test_delta_angle_of_the_example_spot():
+def test_two_theta_of_the_example_spot():
     if not have_example():
         return
     images = da6idb.open_scan(EXAMPLE_MASTER).images()
     spot = (440, 360, 20, 20)
-    check("session/delta_angle_spot", {
-        "circle": round(float(images.geometry().detector_angles[1][0]), 6),
-        "at_peak": round(float(images.delta_angles(spot).max()), 6),
-        "weighted": round(images.delta_angle(spot), 6),
-        "plain": round(images.delta_angle(spot, weight=None), 6),
+    circle = float(images.geometry().detector_angles[1][0])
+    check("session/two_theta_spot", {
+        "circle_delta": round(circle, 6),
+        "at_peak": round(float(images.two_theta_angles(spot).max()), 6),
+        "weighted": round(images.two_theta(spot), 6),
+        "plain": round(images.two_theta(spot, weight=None), 6),
     })
-    # the box sits below the centre pixel, so it is a lower angle than the
-    # circle reads -- and the stored ROI straddling the centre is not
-    assert images.delta_angle(spot) < float(images.geometry().detector_angles[1][0])
+    # the box sits below the centre pixel, so it is a smaller angle than the
+    # circle reads; a stored ROI straddling the centre is not
+    assert images.two_theta(spot) < circle
+    assert abs(images.two_theta(0) - circle) < 0.01

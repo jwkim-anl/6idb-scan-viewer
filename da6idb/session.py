@@ -263,6 +263,7 @@ class Images:
         self.data = ImageData(Path(path), master=master)
         self.path = self.data.path
         self._geometry = None
+        self._converter = None
 
     @property
     def stack(self) -> np.ndarray:
@@ -436,6 +437,12 @@ class Images:
                                            master=self.data.master_path)
         return self._geometry
 
+    def converter(self):
+        """The xrayutilities converter for this geometry, built once."""
+        if self._converter is None:
+            self._converter = _convert.build_converter(self.geometry())
+        return self._converter
+
     def _rect_or_frame(self, roi) -> Rect:
         """``None`` means the whole detector, which is just a big rectangle."""
         if roi is None:
@@ -443,15 +450,14 @@ class Images:
                         float(self.frame_shape[1]))
         return self.rect(roi)
 
-    def delta_angles(self, roi=0) -> pd.Series:
-        """The delta each frame's feature in *roi* was scattered through.
+    def two_theta_angles(self, roi=0) -> pd.Series:
+        """The scattering angle the feature in *roi* sat at, frame by frame.
 
-        The delta circle reads the angle of one pixel -- the detector centre.
-        A feature anywhere else is at that reading plus the angle its own
-        pixel subtends at the sample, which is what this adds: the centre of
-        mass of *roi* on each frame, turned into an angle through the
-        detector distance and the pixel size, with the sign taken from the
-        recorded pixel directions.
+        The detector circle reads the angle of the centre pixel, so a spot
+        anywhere else is at a different two theta. This takes the centre of
+        mass of *roi* on each frame and asks xrayutilities where that pixel
+        actually points, using the same geometry the HKL conversion uses --
+        both detector circles included, not just delta.
 
         *roi* is anything :meth:`rect` takes, or ``None`` for the whole
         frame. Returns one angle in degrees per frame.
@@ -459,24 +465,24 @@ class Images:
         rect = self._rect_or_frame(roi)
         metrics = _rois.series(self.data.stack, rect)
         x, y = rect.to_frame(metrics["comx"], metrics["comy"], self.frame_shape)
-        axis, _ = _detector.delta_pixel_axis(self.geometry())
-        values = _detector.delta_angles(self.geometry(), (x, y)[axis])
-        return pd.Series(values, name="delta [deg]",
+        values = _detector.two_theta_at(self.geometry(), x, y,
+                                        hxrd=self.converter())
+        return pd.Series(values, name="2theta [deg]",
                          index=pd.RangeIndex(self.n_frames, name="frame"))
 
-    def delta_angle(self, roi=0, weight="sum") -> float:
-        """One delta for the whole scan: :meth:`delta_angles` averaged.
+    def two_theta(self, roi=0, weight="sum") -> float:
+        """One two theta for the whole scan: :meth:`two_theta_angles` averaged.
 
         Weighted by *weight*, an ROI metric, so the frames where the feature
         was actually lit count for more than the ones where the box held
-        nothing but background -- the centre of mass along the scan, in other
-        words. Pass ``weight=None`` for a plain mean over the frames.
+        nothing but background -- the centre of mass along the scan, in
+        other words. Pass ``weight=None`` for a plain mean over the frames.
 
         The average is taken over the per-frame angles rather than over one
-        summed image, so it stays right if the delta circle itself moved
-        during the scan.
+        summed image, so it stays right if the detector itself moved during
+        the scan.
         """
-        angles = self.delta_angles(roi).to_numpy(dtype=float)
+        angles = self.two_theta_angles(roi).to_numpy(dtype=float)
         if weight is None:
             return float(np.nanmean(angles))
         if weight not in _rois.METRICS:

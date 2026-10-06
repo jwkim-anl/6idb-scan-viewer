@@ -3,6 +3,8 @@
 import dataclasses
 
 import numpy as np
+from pathlib import Path
+
 from helpers import EXAMPLE_IMAGE, EXAMPLE_MASTER, Sandbox, check, have_example
 
 from da6idb.hkl import convert as _c, geometry as hv
@@ -105,77 +107,85 @@ def test_conversion_reduces_to_the_brightest():
     check("hkl/cloud_bounds", [list(b) for b in cloud.bounds()])
 
 
-def _bare_geometry(**changes):
-    """A geometry with no file behind it, to pin the arithmetic alone."""
-    from pathlib import Path
-    g = hv.HklGeometry(image_path=Path("none.h5"), master_path=None,
-                       frame_shape=(100, 100), n_frames=3,
-                       distance=1000.0, detector_size=(100.0, 100.0),
-                       center_pixel=(50.0, 50.0))
-    return dataclasses.replace(g, **changes) if changes else g
 
-
-def test_delta_axis_and_sign_come_from_the_recorded_directions():
+def test_circle_delta_is_the_motor_reading_per_frame():
     from da6idb.hkl import detector as dt
-    # as 6-ID-B records it: pixels run y- then z-, delta turns about y-
-    assert dt.delta_pixel_axis(_bare_geometry()) == (1, -1.0)
-    # hang the detector the other way up and the sign goes with it
-    assert dt.delta_pixel_axis(
-        _bare_geometry(pixel_direction=("y-", "z+"))) == (1, 1.0)
-    # swap the pixel axes and it is comx, not comy, that follows delta
-    assert dt.delta_pixel_axis(
-        _bare_geometry(pixel_direction=("z-", "y-"))) == (0, -1.0)
-    # a detector whose pixels do not follow delta at all is refused
+    g = hv.HklGeometry(image_path=Path("none.h5"), master_path=None,
+                       frame_shape=(8, 8), n_frames=3,
+                       detector_angles=np.array([[1.0, 2.0, 3.0],
+                                                 [10.0, 20.0, 30.0]]))
+    assert np.allclose(dt.circle_delta(g), [10.0, 20.0, 30.0])
+    # a still detector is recorded once and broadcast over the frames
+    g = dataclasses.replace(g, detector_angles=np.array([[1.0], [10.0]]))
+    assert np.allclose(dt.circle_delta(g), [10.0, 10.0, 10.0])
     try:
-        dt.delta_pixel_axis(_bare_geometry(pixel_direction=("y-", "x+")))
+        dt.circle_delta(dataclasses.replace(g, detector_angles=np.zeros((3, 3))))
     except ValueError as error:
-        assert "delta circle" in str(error)
+        assert "detector circles" in str(error)
     else:
         raise AssertionError("should have refused")
 
 
-def test_pixel_offset_is_the_angle_the_pixel_subtends():
-    from da6idb.hkl import detector as dt
-    g = _bare_geometry()                       # 1 unit pixels, 1000 away
-    assert dt.pixel_offset(g, 50.0) == 0.0     # the centre reads the circle
-    assert np.isclose(dt.pixel_offset(g, 51.0),
-                      -np.degrees(np.arctan2(1.0, 1000.0)))
-    # an arctangent, not a small-angle approximation: 1000 pixels out is 45
-    assert np.isclose(dt.pixel_offset(g, 1050.0), -45.0)
-    assert np.isclose(dt.pixel_offset(g, -950.0), 45.0)
-
-
-def test_delta_angles_add_the_circle_reading_of_each_frame():
-    from da6idb.hkl import detector as dt
-    g = _bare_geometry(detector_angles=np.array([[0.0, 0.0, 0.0],
-                                                 [10.0, 20.0, 30.0]]))
-    assert np.allclose(dt.delta_angles(g, 50.0), [10.0, 20.0, 30.0])
-    # one pixel per frame is taken frame by frame
-    assert np.allclose(dt.delta_angles(g, [50.0, 1050.0, 50.0]),
-                       [10.0, -25.0, 30.0])
-
-
-def test_delta_is_the_circle_reading_that_would_centre_the_feature():
-    """Checked against xrayutilities, which knows nothing of this module."""
+def test_two_theta_matches_the_bragg_condition():
+    """Against |Q| from the conversion, which gets there another way."""
     if not have_example():
         return
-    g = hv.read_geometry(EXAMPLE_IMAGE)
     from da6idb.hkl import detector as dt
+    g = hv.read_geometry(EXAMPLE_IMAGE)
     hxrd = _c.build_converter(g)
     frame = 0
     sample = [float(row[frame]) for row in g.sample_angles]
     nu, delta = (float(row[frame]) for row in g.detector_angles)
-    cx, cy = g.center_pixel
 
-    def hkl_at(delta_value, i, j):
-        q = hxrd.Ang2Q.area(*sample, nu, delta_value, UB=g.ub)
-        return np.array([c[int(i), int(j)] for c in q])
+    for x, y in ((311.0, 338.0), (120.0, 260.0), (470.0, 430.0)):
+        q = hxrd.Ang2Q.area(*sample, nu, delta, UB=np.eye(3))
+        magnitude = np.sqrt(sum(c[int(x), int(y)] ** 2 for c in q))
+        bragg = 2 * np.degrees(np.arcsin(
+            magnitude * hxrd.wavelength / (4 * np.pi)))
+        assert np.isclose(dt.two_theta_at(g, x, y, hxrd=hxrd)[frame], bragg,
+                          atol=1e-9)
+    # the centre pixel is what the circle reads, this scan having nu = 0
+    assert np.isclose(dt.two_theta_at(g, *g.center_pixel, hxrd=hxrd)[frame],
+                      delta, atol=1e-9)
 
-    for pixel in (260.0, 338.0, 430.0):
-        moved = float(dt.delta_angles(g, pixel)[frame])
-        # the feature's own pixel at the real delta, against the centre pixel
-        # at the delta we derive: the same place in reciprocal space
-        assert np.allclose(hkl_at(delta, cx, pixel), hkl_at(moved, cx, cy),
+
+def test_two_theta_is_exact_at_a_fractional_pixel():
+    """The basis is affine, so a centre of mass is not rounded to a pixel."""
+    if not have_example():
+        return
+    from da6idb.hkl import detector as dt
+    g = hv.read_geometry(EXAMPLE_IMAGE)
+    hxrd = _c.build_converter(g)
+    angles = [float(row[0]) for row in g.detector_angles]
+    origin, step_x, step_y = dt.detector_basis(hxrd, angles)
+    full = np.asarray(hxrd.Ang2Q.getDetectorPos(*angles, dim=2))
+    for i, j in ((0, 0), (311, 338), (515, 515), (120, 430)):
+        assert np.allclose(origin + i * step_x + j * step_y, full[:, i, j],
                            atol=1e-9)
-    # and it is not a no-op: off-centre really does move the angle
-    assert abs(float(dt.delta_angles(g, 430.0)[frame]) - delta) > 0.3
+    # and between pixels it lands between their angles, not on one of them
+    low, high = (float(dt.two_theta_at(g, 311.0, y, hxrd=hxrd)[0])
+                 for y in (400.0, 401.0))
+    middle = float(dt.two_theta_at(g, 311.0, 400.5, hxrd=hxrd)[0])
+    assert min(low, high) < middle < max(low, high)
+    assert np.isclose(middle, (low + high) / 2, atol=1e-6)
+
+
+def test_two_theta_follows_both_circles_not_just_delta():
+    """The point of asking xrayutilities rather than doing it by hand."""
+    if not have_example():
+        return
+    from da6idb.hkl import detector as dt
+    g = hv.read_geometry(EXAMPLE_IMAGE)
+    off_centre = (470.0, 430.0)
+    swung = dataclasses.replace(
+        g, detector_angles=np.array([[3.0] * g.n_frames,
+                                     list(g.detector_angles[1])]))
+    straight = float(dt.two_theta_at(g, *off_centre)[0])
+    turned = float(dt.two_theta_at(swung, *off_centre)[0])
+    # 0.031 deg at this pixel: small, but it is the whole difference
+    # between the angle the detector read and the angle the spot was at
+    assert abs(turned - straight) > 0.02, (straight, turned)
+    # a pixel off-centre horizontally is at a larger angle than its vertical
+    # offset alone would say -- which is what delta on its own would miss
+    vertical_only = float(dt.two_theta_at(g, *g.center_pixel, hxrd=None)[0])
+    assert float(dt.two_theta_at(g, 470.0, g.center_pixel[1])[0]) > vertical_only

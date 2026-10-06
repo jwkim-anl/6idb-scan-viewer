@@ -1,19 +1,20 @@
-"""Turning a detector pixel into the angle the detector circle would need.
+"""The scattering angle a detector pixel sees, from xrayutilities' geometry.
 
-A feature does not generally sit at the centre of the detector, so the circle
-reading is not its scattering angle: the pixel's own offset has to be added.
-These scans are vertical scattering, so the circle in question is delta, and
-the offset is the angle the pixel subtends at the sample.
+Two theta is the angle between the incident beam and the direction from the
+sample to the pixel. The detector circle reads the angle of one pixel -- the
+centre -- so a feature anywhere else is at a different angle, and on a
+2D detector that offset is not along one axis only.
 
-Which way round that goes is not assumed here. Rotating the detector about a
-circle whose axis is *d* carries a point on the beam *b* along ``d x b``, so
-the pixel direction with a component along that is the one delta moves the
-image across, and the sign of that component says whether a higher pixel
-index means a higher angle or a lower one. Both the circle axis and the pixel
-directions come out of the file, so a beamline that mounts its detector the
-other way round still gets the right answer.
+xrayutilities already knows where every pixel is once the detector arm has
+turned: ``QConversion.getDetectorPos`` applies the rotations and
+``VecAngle`` takes the angle against the beam. Nothing about the mounting is
+assumed here -- circle directions, pixel directions, centre pixel, distance
+and pixel size all arrive through the same converter the HKL conversion is
+built on, so both answer from one description of the instrument.
 
-No Qt, no xrayutilities. A notebook imports this directly.
+A pixel's position is affine in its two indices, so the whole frame follows
+exactly from a 2x2 corner, and a centre of mass lands on its own angle
+rather than the nearest pixel's.
 """
 
 from __future__ import annotations
@@ -25,68 +26,74 @@ from da6idb.hkl.geometry import DETECTOR_MOTORS, HklGeometry
 # psic_nu then psic_delta, as DETECTOR_MOTORS has them.
 DELTA_CIRCLE = DETECTOR_MOTORS.index("psic_delta")
 
-_AXES = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}
-
-
-def direction_vector(text: str) -> np.ndarray:
-    """A direction the files write as ``"z+"`` or ``"y-"``, as a unit vector."""
-    name = str(text).strip().lower()
-    if not name or name[0] not in _AXES:
-        raise ValueError(f"{text!r} is not a direction like 'z+' or 'y-'")
-    sign = -1.0 if name[1:2] == "-" else 1.0
-    return sign * np.array(_AXES[name[0]], dtype=float)
-
-
-def delta_pixel_axis(geometry: HklGeometry) -> tuple[int, float]:
-    """Which frame axis delta sweeps the image along, and which way.
-
-    Returns ``(axis, sign)``. *axis* indexes the frame as it is stored, so 0
-    goes with ``comx`` and 1 with ``comy``; *sign* is ``+1`` when a higher
-    pixel index means a higher delta and ``-1`` when it means a lower one.
-    """
-    beam = np.asarray(geometry.primary_beam, dtype=float)
-    norm = np.linalg.norm(beam)
-    if norm == 0:
-        raise ValueError("the primary beam direction is zero")
-    sweep = np.cross(direction_vector(geometry.detector_dirs[DELTA_CIRCLE]),
-                     beam / norm)
-    overlap = [float(np.dot(direction_vector(p), sweep))
-               for p in geometry.pixel_direction]
-    axis = int(np.argmax(np.abs(overlap)))
-    if abs(overlap[axis]) < 0.5:
-        raise ValueError(
-            "neither detector axis follows the delta circle: directions "
-            f"{tuple(geometry.pixel_direction)} against {sweep.tolist()}"
-        )
-    return axis, float(np.sign(overlap[axis]))
-
-
-def pixel_offset(geometry: HklGeometry, pixel) -> np.ndarray:
-    """Degrees between *pixel* and the pixel the delta circle reads.
-
-    *pixel* is a position along the axis :func:`delta_pixel_axis` picks, in
-    detector pixels. The distance and the detector size are both read from
-    the same ``DETECTOR_SETUP``, so whatever length unit they are in cancels.
-    """
-    axis, sign = delta_pixel_axis(geometry)
-    offset = (np.asarray(pixel, dtype=float)
-              - float(geometry.center_pixel[axis])) * geometry.pixel_widths()[axis]
-    return sign * np.degrees(np.arctan2(offset, float(geometry.distance)))
-
 
 def circle_delta(geometry: HklGeometry) -> np.ndarray:
-    """What the delta circle read on each frame."""
-    angles = np.asarray(geometry.detector_angles, dtype=float)
-    if angles.ndim != 2 or angles.shape[0] <= DELTA_CIRCLE:
-        raise ValueError("this geometry records no delta circle")
-    return np.broadcast_to(angles[DELTA_CIRCLE].ravel(),
-                           (int(geometry.n_frames),)).astype(float)
+    """What the delta circle read on each frame.
 
-
-def delta_angles(geometry: HklGeometry, pixel) -> np.ndarray:
-    """The delta a feature sitting at *pixel* is actually scattered through.
-
-    The circle's own reading for each frame, plus that frame's pixel offset.
-    *pixel* is one position or one per frame.
+    The angle of the centre pixel, which is what the motor is set to -- not
+    the angle of whatever the detector was actually looking at.
     """
-    return circle_delta(geometry) + pixel_offset(geometry, pixel)
+    return _per_frame(geometry)[DELTA_CIRCLE]
+
+
+def _per_frame(geometry: HklGeometry) -> np.ndarray:
+    """The detector circle readings, one column per frame."""
+    angles = np.asarray(geometry.detector_angles, dtype=float)
+    if angles.ndim != 2 or angles.shape[0] != len(DETECTOR_MOTORS):
+        raise ValueError(
+            f"expected {len(DETECTOR_MOTORS)} detector circles, "
+            f"got {np.shape(geometry.detector_angles)}"
+        )
+    return np.broadcast_to(angles, (angles.shape[0], int(geometry.n_frames)))
+
+
+def detector_basis(hxrd, detector_angles) -> tuple[np.ndarray, ...]:
+    """Pixel (0, 0) and one step along each pixel axis, in lab coordinates.
+
+    ``getDetectorPos`` returns the direction to each pixel with the arm
+    rotations applied. That position is affine in the pixel indices, so
+    these three vectors give any pixel, whole or fractional, exactly.
+    """
+    corner = np.asarray(
+        hxrd.Ang2Q.getDetectorPos(*detector_angles, dim=2, roi=[0, 2, 0, 2]),
+        dtype=float,
+    )
+    origin = corner[:, 0, 0]
+    return origin, corner[:, 1, 0] - origin, corner[:, 0, 1] - origin
+
+
+def two_theta_at(geometry: HklGeometry, x, y, hxrd=None) -> np.ndarray:
+    """The scattering angle at pixel ``(x, y)`` on each frame, in degrees.
+
+    *x* and *y* are detector pixels indexed as the frame is stored, and may
+    be fractional -- a centre of mass usually is. Give one position, or one
+    per frame.
+
+    The detector basis is rebuilt only when the circles move, so a scan that
+    leaves the detector still costs one call however many frames it has.
+    """
+    from xrayutilities.math import VecAngle
+
+    if hxrd is None:
+        from da6idb.hkl.convert import build_converter
+
+        hxrd = build_converter(geometry)
+
+    beam = np.asarray(geometry.primary_beam, dtype=float)
+    angles = _per_frame(geometry)
+    n_frames = angles.shape[1]
+    x = np.broadcast_to(np.asarray(x, dtype=float), (n_frames,))
+    y = np.broadcast_to(np.asarray(y, dtype=float), (n_frames,))
+
+    out = np.empty(n_frames, dtype=float)
+    seen: dict[tuple, tuple] = {}
+    for frame in range(n_frames):
+        position = angles[:, frame]
+        key = tuple(np.round(position, 9))
+        basis = seen.get(key)
+        if basis is None:
+            basis = seen[key] = detector_basis(hxrd, position)
+        origin, step_x, step_y = basis
+        here = origin + x[frame] * step_x + y[frame] * step_y
+        out[frame] = float(VecAngle(here, beam, deg=True))
+    return out

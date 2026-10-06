@@ -15,7 +15,7 @@ pyvista.
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |
 | `da6idb.hkl.convert` | frames to a point cloud in reciprocal space |
-| `da6idb.hkl.detector` | where a pixel sits in angle on the delta circle |
+| `da6idb.hkl.detector` | the scattering angle a detector pixel sees |
 | `da6idb.hkl.grid` | binning onto a regular lattice, cached as `.vti` |
 | `da6idb.hkl.slice` | planes and slabs through a grid |
 | `da6idb.batch` | gridding a run of scans onto one lattice |
@@ -67,13 +67,11 @@ Turning detector frames into a cloud of points in reciprocal space.
 
 ### `da6idb.hkl.detector`
 
-Turning a detector pixel into the angle the detector circle would need.
+The scattering angle a detector pixel sees, from xrayutilities' geometry.
 
-- `direction_vector(text)` — A direction the files write as ``"z+"`` or ``"y-"``, as a unit vector.
-- `delta_pixel_axis(geometry)` — Which frame axis delta sweeps the image along, and which way.
-- `pixel_offset(geometry, pixel)` — Degrees between *pixel* and the pixel the delta circle reads.
 - `circle_delta(geometry)` — What the delta circle read on each frame.
-- `delta_angles(geometry, pixel)` — The delta a feature sitting at *pixel* is actually scattered through.
+- `detector_basis(hxrd, detector_angles)` — Pixel (0, 0) and one step along each pixel axis, in lab coordinates.
+- `two_theta_at(geometry, x, y, hxrd=None)` — The scattering angle at pixel ``(x, y)`` on each frame, in degrees.
 
 ### `da6idb.hkl.geometry`
 
@@ -195,8 +193,9 @@ The objects a notebook starts from.
   - `.roi_series(self, roi=0)` — Every metric for one ROI, frame by frame.
   - `.roi_curve(self, roi=0, metric='sum', normalise=None, background=None)` — One ROI's metric against frame number.
   - `.geometry(self)` — The instrument description for this scan, read once and kept.
-  - `.delta_angles(self, roi=0)` — The delta each frame's feature in *roi* was scattered through.
-  - `.delta_angle(self, roi=0, weight='sum')` — One delta for the whole scan: :meth:`delta_angles` averaged.
+  - `.converter(self)` — The xrayutilities converter for this geometry, built once.
+  - `.two_theta_angles(self, roi=0)` — The scattering angle the feature in *roi* sat at, frame by frame.
+  - `.two_theta(self, roi=0, weight='sum')` — One two theta for the whole scan: :meth:`two_theta_angles` averaged.
 - **`HklMap`** — One scan in reciprocal space: the geometry, the cloud, the grid.
   - `.sources(self)` — Where each piece of the geometry came from.
   - `.cloud(self, threshold=0.0, max_points=2000000, **kwargs)` — The surviving pixels as H, K, L and intensity.
@@ -205,4 +204,4 @@ The objects a notebook starts from.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 109 callables, 9 classes -->
+<!-- 108 callables, 9 classes -->
