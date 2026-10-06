@@ -70,6 +70,27 @@ class Rect:
             origin + self.height * across,
         ])
 
+    def to_frame(self, u, v, shape):
+        """Where ROI coordinates land on the frame, as ``(x, y)`` pixels.
+
+        :func:`reduce_frame` reports a centre of mass in the sub-image's own
+        coordinates, which is not where it sits on the detector. This undoes
+        that, by the same route :meth:`sub_frame` took: a rotated rectangle
+        is walked along its own axes from its corner, an unrotated one is a
+        slice, so its origin is the clipped integer corner rather than the
+        fractional one.
+        """
+        u = np.asarray(u, dtype=float)
+        v = np.asarray(v, dtype=float)
+        if not self.rotated:
+            x0, _, y0, _ = self.bbox(shape)
+            return x0 + u, y0 + v
+        radians = np.deg2rad(float(self.angle))
+        along = np.array([np.cos(radians), np.sin(radians)])
+        across = np.array([-np.sin(radians), np.cos(radians)])
+        return (self.x + u * along[0] + v * across[0],
+                self.y + u * along[1] + v * across[1])
+
     def bbox(self, shape) -> tuple[int, int, int, int]:
         """Axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*."""
         nx, ny = int(shape[0]), int(shape[1])

@@ -25,6 +25,7 @@ from da6idb import scan as _scan
 from da6idb.rois import Rect
 from da6idb.files import list_hdf_files, resolve_image_file, scan_number
 from da6idb.hkl import convert as _convert
+from da6idb.hkl import detector as _detector
 from da6idb.hkl import grid as _grid
 from da6idb.hkl import slice as _slice
 from da6idb.hkl.geometry import read_geometry
@@ -261,6 +262,7 @@ class Images:
     def __init__(self, path, master=None):
         self.data = ImageData(Path(path), master=master)
         self.path = self.data.path
+        self._geometry = None
 
     @property
     def stack(self) -> np.ndarray:
@@ -424,6 +426,67 @@ class Images:
             label += f"/{normalise}"
         return pd.Series(values, name=label,
                          index=pd.RangeIndex(self.n_frames, name="frame"))
+
+    # -- where a feature sat, in angle ------------------------------------
+
+    def geometry(self):
+        """The instrument description for this scan, read once and kept."""
+        if self._geometry is None:
+            self._geometry = read_geometry(self.path,
+                                           master=self.data.master_path)
+        return self._geometry
+
+    def _rect_or_frame(self, roi) -> Rect:
+        """``None`` means the whole detector, which is just a big rectangle."""
+        if roi is None:
+            return Rect(0.0, 0.0, float(self.frame_shape[0]),
+                        float(self.frame_shape[1]))
+        return self.rect(roi)
+
+    def delta_angles(self, roi=0) -> pd.Series:
+        """The delta each frame's feature in *roi* was scattered through.
+
+        The delta circle reads the angle of one pixel -- the detector centre.
+        A feature anywhere else is at that reading plus the angle its own
+        pixel subtends at the sample, which is what this adds: the centre of
+        mass of *roi* on each frame, turned into an angle through the
+        detector distance and the pixel size, with the sign taken from the
+        recorded pixel directions.
+
+        *roi* is anything :meth:`rect` takes, or ``None`` for the whole
+        frame. Returns one angle in degrees per frame.
+        """
+        rect = self._rect_or_frame(roi)
+        metrics = _rois.series(self.data.stack, rect)
+        x, y = rect.to_frame(metrics["comx"], metrics["comy"], self.frame_shape)
+        axis, _ = _detector.delta_pixel_axis(self.geometry())
+        values = _detector.delta_angles(self.geometry(), (x, y)[axis])
+        return pd.Series(values, name="delta [deg]",
+                         index=pd.RangeIndex(self.n_frames, name="frame"))
+
+    def delta_angle(self, roi=0, weight="sum") -> float:
+        """One delta for the whole scan: :meth:`delta_angles` averaged.
+
+        Weighted by *weight*, an ROI metric, so the frames where the feature
+        was actually lit count for more than the ones where the box held
+        nothing but background -- the centre of mass along the scan, in other
+        words. Pass ``weight=None`` for a plain mean over the frames.
+
+        The average is taken over the per-frame angles rather than over one
+        summed image, so it stays right if the delta circle itself moved
+        during the scan.
+        """
+        angles = self.delta_angles(roi).to_numpy(dtype=float)
+        if weight is None:
+            return float(np.nanmean(angles))
+        if weight not in _rois.METRICS:
+            raise ValueError(f"weight must be None or one of {list(_rois.METRICS)}")
+        weights = _rois.series(
+            self.data.stack, self._rect_or_frame(roi))[weight].astype(float)
+        good = np.isfinite(angles) & np.isfinite(weights) & (weights > 0)
+        if not good.any():
+            raise ValueError(f"no frame has a positive {weight} to weight by")
+        return float(np.average(angles[good], weights=weights[good]))
 
     def __repr__(self):
         return (f"<Images {self.path.name} — {self.n_frames} x "

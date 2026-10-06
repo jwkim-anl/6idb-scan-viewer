@@ -110,3 +110,32 @@ def test_rect_corners_match_the_axes_sub_frame_walks():
     assert np.isclose(np.dot(corners[1] - corners[0], corners[3] - corners[0]), 0.0)
     plain = Rect(10.0, 20.0, 8.0, 6.0).corners()
     assert np.allclose(plain, [(10, 20), (18, 20), (18, 26), (10, 26)])
+
+
+def test_to_frame_puts_a_centre_of_mass_back_where_it_came_from():
+    """comx/comy are in the sub-image's coordinates, not the detector's."""
+    from da6idb.rois import series
+    grid_x, grid_y = np.mgrid[0:60, 0:60]
+    blob = 1000.0 * np.exp(-((grid_x - 33.0) ** 2 + (grid_y - 27.0) ** 2) / 8.0)
+    stack = blob[None].astype(np.float32)
+    width, height = 16.0, 14.0
+    for angle in (0.0, 20.0, 45.0, 90.0, 135.0, 200.0):
+        radians = np.deg2rad(angle)
+        along = np.array([np.cos(radians), np.sin(radians)])
+        across = np.array([-np.sin(radians), np.cos(radians)])
+        # rotation is about the corner, so put the corner where the blob
+        # lands in the middle of the box whatever the angle
+        corner = np.array([33.0, 27.0]) - width / 2 * along - height / 2 * across
+        rect = Rect(float(corner[0]), float(corner[1]), width, height, angle)
+        metrics = series(stack, rect)
+        x, y = rect.to_frame(metrics["comx"][0], metrics["comy"][0], (60, 60))
+        assert np.hypot(x - 33.0, y - 27.0) < 0.05, (angle, x, y)
+
+    # unrotated, the origin is the clipped integer corner the slice started
+    # at -- not the fractional one, which would shift every result
+    frame = np.zeros((1, 60, 60), dtype=np.float32)
+    frame[0, 33, 27] = 1000.0
+    for rect in (Rect(25, 20, 16, 14), Rect(24.6, 19.3, 16.0, 14.0)):
+        metrics = series(frame, rect)
+        x, y = rect.to_frame(metrics["comx"][0], metrics["comy"][0], (60, 60))
+        assert (x, y) == (33.0, 27.0)

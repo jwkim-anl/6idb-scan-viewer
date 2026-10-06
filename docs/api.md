@@ -15,6 +15,7 @@ pyvista.
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |
 | `da6idb.hkl.convert` | frames to a point cloud in reciprocal space |
+| `da6idb.hkl.detector` | where a pixel sits in angle on the delta circle |
 | `da6idb.hkl.grid` | binning onto a regular lattice, cached as `.vti` |
 | `da6idb.hkl.slice` | planes and slabs through a grid |
 | `da6idb.batch` | gridding a run of scans onto one lattice |
@@ -63,6 +64,16 @@ Turning detector frames into a cloud of points in reciprocal space.
 - **`HklCloud`** — The reduced point cloud handed to the plotter.
   - `.bounds(self)` — ``((h0, h1), (k0, k1), (l0, l1))`` of the points kept.
 - `convert(geometry, first=0, last=None, step=1, threshold=0.0, max_points=2000000, progress=None)` — Map the selected frames into (H, K, L), keeping the interesting pixels.
+
+### `da6idb.hkl.detector`
+
+Turning a detector pixel into the angle the detector circle would need.
+
+- `direction_vector(text)` — A direction the files write as ``"z+"`` or ``"y-"``, as a unit vector.
+- `delta_pixel_axis(geometry)` — Which frame axis delta sweeps the image along, and which way.
+- `pixel_offset(geometry, pixel)` — Degrees between *pixel* and the pixel the delta circle reads.
+- `circle_delta(geometry)` — What the delta circle read on each frame.
+- `delta_angles(geometry, pixel)` — The delta a feature sitting at *pixel* is actually scattered through.
 
 ### `da6idb.hkl.geometry`
 
@@ -128,6 +139,7 @@ Rectangles on the detector, and what they reduce each frame to.
   - `.from_roi(cls, roi)` — From a pyqtgraph ROI, so the windows can hand one straight over.
   - `.from_stored(cls, spec)` — From the dictionaries the files record.
   - `.corners(self)` — The four corners ``(x, y)``, going round, for drawing the rectangle.
+  - `.to_frame(self, u, v, shape)` — Where ROI coordinates land on the frame, as ``(x, y)`` pixels.
   - `.bbox(self, shape)` — Axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*.
   - `.pixel_count(self, shape, frame=None)` — How many pixels it covers -- the N in a ``background x N`` correction.
   - `.sub_frame(self, frame)` — The pixels of one frame inside the rectangle.
@@ -182,6 +194,9 @@ The objects a notebook starts from.
   - `.show(self, frame=0, rois=None, log=False, ax=None, cmap='viridis', **kwargs)` — One frame with its ROIs drawn on it, so you can place a new one.
   - `.roi_series(self, roi=0)` — Every metric for one ROI, frame by frame.
   - `.roi_curve(self, roi=0, metric='sum', normalise=None, background=None)` — One ROI's metric against frame number.
+  - `.geometry(self)` — The instrument description for this scan, read once and kept.
+  - `.delta_angles(self, roi=0)` — The delta each frame's feature in *roi* was scattered through.
+  - `.delta_angle(self, roi=0, weight='sum')` — One delta for the whole scan: :meth:`delta_angles` averaged.
 - **`HklMap`** — One scan in reciprocal space: the geometry, the cloud, the grid.
   - `.sources(self)` — Where each piece of the geometry came from.
   - `.cloud(self, threshold=0.0, max_points=2000000, **kwargs)` — The surviving pixels as H, K, L and intensity.
@@ -190,4 +205,4 @@ The objects a notebook starts from.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 100 callables, 9 classes -->
+<!-- 109 callables, 9 classes -->
