@@ -62,6 +62,51 @@ def detector_basis(hxrd, detector_angles) -> tuple[np.ndarray, ...]:
     return origin, corner[:, 1, 0] - origin, corner[:, 0, 1] - origin
 
 
+def _angles_at(basis, beam, x, y) -> np.ndarray:
+    """The angle to each pixel coordinate, for one detector position."""
+    from xrayutilities.math import VecAngle
+
+    origin, step_x, step_y = basis
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    points = (origin + x[..., None] * step_x + y[..., None] * step_y)
+    flat = VecAngle(points.reshape(-1, 3), beam, deg=True)
+    return np.asarray(flat, dtype=float).reshape(x.shape)
+
+
+def _converter(geometry, hxrd):
+    if hxrd is not None:
+        return hxrd
+    from da6idb.hkl.convert import build_converter
+
+    return build_converter(geometry)
+
+
+def two_theta_maps(geometry: HklGeometry, x, y, hxrd=None):
+    """Scattering angles at pixel coordinates *x*, *y*, for every frame.
+
+    Returns ``(maps, index)``: one array shaped like *x* per distinct
+    detector position, and which of them each frame uses. Frames that leave
+    the detector where it was share a map, so a scan that never moves it
+    evaluates once however many frames it has and however large the region.
+    """
+    hxrd = _converter(geometry, hxrd)
+    beam = np.asarray(geometry.primary_beam, dtype=float)
+    angles = _per_frame(geometry)
+
+    maps: list[np.ndarray] = []
+    seen: dict[tuple, int] = {}
+    index = np.empty(angles.shape[1], dtype=int)
+    for frame in range(angles.shape[1]):
+        key = tuple(np.round(angles[:, frame], 9))
+        if key not in seen:
+            seen[key] = len(maps)
+            maps.append(_angles_at(detector_basis(hxrd, angles[:, frame]),
+                                   beam, x, y))
+        index[frame] = seen[key]
+    return maps, index
+
+
 def two_theta_at(geometry: HklGeometry, x, y, hxrd=None) -> np.ndarray:
     """The scattering angle at pixel ``(x, y)`` on each frame, in degrees.
 
@@ -72,13 +117,7 @@ def two_theta_at(geometry: HklGeometry, x, y, hxrd=None) -> np.ndarray:
     The detector basis is rebuilt only when the circles move, so a scan that
     leaves the detector still costs one call however many frames it has.
     """
-    from xrayutilities.math import VecAngle
-
-    if hxrd is None:
-        from da6idb.hkl.convert import build_converter
-
-        hxrd = build_converter(geometry)
-
+    hxrd = _converter(geometry, hxrd)
     beam = np.asarray(geometry.primary_beam, dtype=float)
     angles = _per_frame(geometry)
     n_frames = angles.shape[1]
@@ -90,10 +129,8 @@ def two_theta_at(geometry: HklGeometry, x, y, hxrd=None) -> np.ndarray:
     for frame in range(n_frames):
         position = angles[:, frame]
         key = tuple(np.round(position, 9))
-        basis = seen.get(key)
-        if basis is None:
-            basis = seen[key] = detector_basis(hxrd, position)
-        origin, step_x, step_y = basis
-        here = origin + x[frame] * step_x + y[frame] * step_y
-        out[frame] = float(VecAngle(here, beam, deg=True))
+        if key not in seen:
+            seen[key] = detector_basis(hxrd, position)
+        out[frame] = float(_angles_at(seen[key], beam,
+                                      x[frame], y[frame]))
     return out

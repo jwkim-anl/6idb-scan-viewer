@@ -70,6 +70,33 @@ class Rect:
             origin + self.height * across,
         ])
 
+    def sample_shape(self, shape) -> tuple[int, int]:
+        """How many samples :meth:`sub_frame` takes along each axis.
+
+        Unrotated that is the clipped integer box; rotated it is one sample
+        per pixel along each edge, counted from the geometry -- see
+        :meth:`sub_frame` for why it cannot come from anywhere else.
+        """
+        if not self.rotated:
+            x0, x1, y0, y1 = self.bbox(shape)
+            return x1 - x0, y1 - y0
+        return (max(1, int(np.ceil(self.width - _SIZE_TOLERANCE))),
+                max(1, int(np.ceil(self.height - _SIZE_TOLERANCE))))
+
+    def sample_points(self, shape):
+        """Frame coordinates of every sample, shaped like the sub-image.
+
+        Two arrays laid out like :meth:`sub_frame`'s result, so a per-pixel
+        quantity -- a scattering angle, say -- lines up with the counts.
+        """
+        columns, rows = self.sample_shape(shape)
+        u = np.arange(columns, dtype=float)[:, None]
+        v = np.arange(rows, dtype=float)[None, :]
+        # unrotated, to_frame keeps the two axes separate; broadcast so both
+        # come back laid out like the sub-image
+        x, y = self.to_frame(u, v, shape)
+        return np.broadcast_arrays(np.asarray(x), np.asarray(y))
+
     def to_frame(self, u, v, shape):
         """Where ROI coordinates land on the frame, as ``(x, y)`` pixels.
 
@@ -134,8 +161,7 @@ class Rect:
         # 90 degrees and 63 at 15 and 45 -- the same rectangle over the same
         # pixels, its sum jumping about 30% with nothing but the angle. The
         # count has to come from the geometry, which is what this does.
-        columns = max(1, int(np.ceil(self.width - _SIZE_TOLERANCE)))
-        rows = max(1, int(np.ceil(self.height - _SIZE_TOLERANCE)))
+        columns, rows = self.sample_shape(frame.shape)
         radians = np.deg2rad(self.angle)
         along = np.array([np.cos(radians), np.sin(radians)])
         across = np.array([-np.sin(radians), np.cos(radians)])
@@ -166,6 +192,25 @@ def empty_series(n_frames: int) -> dict[str, np.ndarray]:
     """Every metric, all zero -- what a rectangle off the detector reduces to."""
     zeros = np.zeros(int(n_frames), dtype=float)
     return {key: zeros.copy() for key in METRICS}
+
+
+def sub_frames(stack: np.ndarray, rect: Rect):
+    """Each frame's pixels inside *rect*, laid out like :meth:`Rect.sample_points`.
+
+    Yields ``None`` for a frame the rectangle misses entirely. Unrotated this
+    is a slice per frame, rotated it resamples, exactly as :func:`series`
+    does -- the two must agree pixel for pixel.
+    """
+    stack = np.asarray(stack)
+    n_frames = int(stack.shape[0])
+    if rect.rotated:
+        for index in range(n_frames):
+            yield rect.sub_frame(stack[index])
+        return
+    x0, x1, y0, y1 = rect.bbox((stack.shape[1], stack.shape[2]))
+    for index in range(n_frames):
+        yield (None if x1 <= x0 or y1 <= y0
+               else np.asarray(stack[index, x0:x1, y0:y1], dtype=np.float32))
 
 
 def series(stack: np.ndarray, rect: Rect) -> dict[str, np.ndarray]:

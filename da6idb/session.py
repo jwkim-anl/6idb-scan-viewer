@@ -450,45 +450,90 @@ class Images:
                         float(self.frame_shape[1]))
         return self.rect(roi)
 
-    def two_theta_angles(self, roi=0) -> pd.Series:
-        """The scattering angle the feature in *roi* sat at, frame by frame.
+    def _two_theta_pass(self, roi, background):
+        """Per-frame mean scattering angle over *roi*, and its weight.
 
-        The detector circle reads the angle of the centre pixel, so a spot
-        anywhere else is at a different two theta. This takes the centre of
-        mass of *roi* on each frame and asks xrayutilities where that pixel
-        actually points, using the same geometry the HKL conversion uses --
-        both detector circles included, not just delta.
+        The angle is averaged *over* the region's pixels, weighted by what
+        each one counted -- not taken at the centre of mass. Two theta is
+        convex in pixel position, least at the centre pixel and rising away
+        from it in every direction, so the angle of the average pixel is
+        systematically lower than the average of the pixels' angles. On a
+        wide region that bias is real and always the same way.
+
+        *background*, another ROI, has its mean per pixel taken off before
+        anything is weighted: left in, it drags each frame's answer towards
+        the middle of the box and flattens the weighting between frames
+        that hold the feature and frames that hold nothing.
+        """
+        rect = self._rect_or_frame(roi)
+        x, y = rect.sample_points(self.frame_shape)
+        maps, which = _detector.two_theta_maps(self.geometry(), x, y,
+                                               hxrd=self.converter())
+        if background is None:
+            level = np.zeros(self.n_frames)
+        else:
+            level = _rois.series(self.data.stack,
+                                 self.rect(background))["mean"].astype(float)
+
+        angles = np.full(self.n_frames, np.nan)
+        counted = np.zeros(self.n_frames)
+        for frame, sub in enumerate(_rois.sub_frames(self.data.stack, rect)):
+            if sub is None:
+                continue
+            lit = np.asarray(sub, dtype=float) - level[frame]
+            np.clip(lit, 0.0, None, out=lit)
+            total = float(lit.sum())
+            counted[frame] = total
+            if total > 0.0:
+                angles[frame] = float((lit * maps[which[frame]]).sum() / total)
+        return angles, counted
+
+    def two_theta_angles(self, roi=0, background=None) -> pd.Series:
+        """The scattering angle of what *roi* held, frame by frame.
+
+        The detector circle reads the angle of the centre pixel, so a
+        feature anywhere else is at a different two theta. This asks
+        xrayutilities for the angle of every pixel in the region, through
+        the same geometry the HKL conversion uses, and averages them
+        weighted by the counts in each -- both detector circles included,
+        not just delta.
+
+        *background* is another ROI whose mean per pixel is taken off first,
+        which matters: background spread evenly over the box pulls the
+        answer towards the middle of the box rather than towards the
+        feature. A frame left with nothing above background gets NaN.
 
         *roi* is anything :meth:`rect` takes, or ``None`` for the whole
         frame. Returns one angle in degrees per frame.
         """
-        rect = self._rect_or_frame(roi)
-        metrics = _rois.series(self.data.stack, rect)
-        x, y = rect.to_frame(metrics["comx"], metrics["comy"], self.frame_shape)
-        values = _detector.two_theta_at(self.geometry(), x, y,
-                                        hxrd=self.converter())
-        return pd.Series(values, name="2theta [deg]",
+        angles, _ = self._two_theta_pass(roi, background)
+        return pd.Series(angles, name="2theta [deg]",
                          index=pd.RangeIndex(self.n_frames, name="frame"))
 
-    def two_theta(self, roi=0, weight="sum") -> float:
+    def two_theta(self, roi=0, background=None, weight="sum") -> float:
         """One two theta for the whole scan: :meth:`two_theta_angles` averaged.
 
         Weighted by *weight*, an ROI metric, so the frames where the feature
-        was actually lit count for more than the ones where the box held
-        nothing but background -- the centre of mass along the scan, in
-        other words. Pass ``weight=None`` for a plain mean over the frames.
+        was lit count for more than the ones where the box held nothing. The
+        default weighs by the counts actually used -- background-subtracted,
+        when *background* is given, which is what makes the weighting mean
+        anything on a region whose background is a large part of its sum.
+        Pass ``weight=None`` for a plain mean over the frames.
 
         The average is taken over the per-frame angles rather than over one
-        summed image, so it stays right if the detector itself moved during
-        the scan.
+        summed image, so it stays right if the detector moved during the
+        scan.
         """
-        angles = self.two_theta_angles(roi).to_numpy(dtype=float)
+        angles, counted = self._two_theta_pass(roi, background)
         if weight is None:
             return float(np.nanmean(angles))
-        if weight not in _rois.METRICS:
+        if weight == "sum":
+            weights = counted
+        elif weight in _rois.METRICS:
+            weights = _rois.series(
+                self.data.stack, self._rect_or_frame(roi))[weight].astype(float)
+        else:
             raise ValueError(f"weight must be None or one of {list(_rois.METRICS)}")
-        weights = _rois.series(
-            self.data.stack, self._rect_or_frame(roi))[weight].astype(float)
         good = np.isfinite(angles) & np.isfinite(weights) & (weights > 0)
         if not good.any():
             raise ValueError(f"no frame has a positive {weight} to weight by")

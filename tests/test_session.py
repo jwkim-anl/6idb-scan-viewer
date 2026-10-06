@@ -5,6 +5,7 @@ from helpers import EXAMPLE_IMAGE, EXAMPLE_MASTER, Sandbox, check, have_example
 from helpers import write_image, write_master
 
 import da6idb
+from da6idb.hkl import detector as _detector
 
 
 def test_the_package_imports_without_qt():
@@ -263,3 +264,49 @@ def test_two_theta_of_the_example_spot():
     # circle reads; a stored ROI straddling the centre is not
     assert images.two_theta(spot) < circle
     assert abs(images.two_theta(0) - circle) < 0.01
+
+
+def test_two_theta_averages_the_angles_not_the_pixels():
+    """Two theta is convex across the detector, so the two differ."""
+    if not have_example():
+        return
+    images = da6idb.open_scan(EXAMPLE_MASTER).images()
+    g = images.geometry()
+    wide = (111, 330, 400, 20)          # a strip right across the detector
+
+    # the angle at the centre pixel is the least anywhere on the detector --
+    # a geometry statement, so asked of the geometry, not of the counts
+    centre = float(_detector.two_theta_at(g, *g.center_pixel,
+                                          hxrd=images.converter())[0])
+    for x in (111.0, 211.0, 411.0, 511.0):
+        assert float(_detector.two_theta_at(g, x, g.center_pixel[1],
+                                            hxrd=images.converter())[0]) > centre
+
+    # so averaging the angles over a wide strip must exceed the angle at its
+    # centre of mass, which is what evaluating at the centroid would give
+    rect = images.rect(wide)
+    metrics = images.roi_series(wide)
+    at_centroid = _detector.two_theta_at(
+        g, *rect.to_frame(metrics["comx"], metrics["comy"], images.frame_shape),
+        hxrd=images.converter())
+    averaged = images.two_theta_angles(wide).to_numpy()
+    assert (averaged > at_centroid).all()
+    check("session/two_theta_jensen_gap",
+          round(float((averaged - at_centroid).mean()) * 1000, 3))
+
+
+def test_two_theta_background_moves_it_towards_the_feature():
+    if not have_example():
+        return
+    images = da6idb.open_scan(EXAMPLE_MASTER).images()
+    spot, empty = (440, 360, 20, 20), (440, 390, 20, 20)
+    raw = images.two_theta(spot)
+    clean = images.two_theta(spot, background=empty)
+    check("session/two_theta_background", {
+        "raw": round(raw, 6), "with_background": round(clean, 6)})
+    assert raw != clean
+    # with the background gone, the frames holding the spot carry the
+    # average: it moves towards the angle at the peak of the rocking curve
+    peak = float(images.two_theta_angles(spot, background=empty).iloc[
+        int(images.roi_curve(spot, "sum", background=empty).idxmax())])
+    assert abs(clean - peak) < abs(raw - peak)
