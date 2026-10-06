@@ -17,12 +17,17 @@ from __future__ import annotations
 
 __version__ = "0.1.0.dev0"
 
-__all__ = ["Scan", "ScanSet", "Images", "HklMap", "open_folder", "open_scan"]
+__all__ = ["Scan", "ScanSet", "Images", "HklMap", "Rect",
+           "open_folder", "open_scan"]
 
 
 def __getattr__(name):
     # Imported on first use, so `import da6idb` costs nothing until the
     # notebook layer is actually wanted.
+    if name == "Rect":
+        from da6idb.rois import Rect
+
+        return Rect
     if name in __all__:
         from da6idb import session
 

@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Tables and labelled arrays: da6idb.session, i.e. the notebook objects.
-notebook = ["pandas>=2.0", "xarray>=2024.1"]
+notebook = ["pandas>=2.0", "xarray>=2024.1", "matplotlib>=3.6"]
 # Reciprocal space: the conversion and the gridding.
 hkl = ["xrayutilities>=1.7", "pyvista>=0.44"]
 # The five windows. Not needed to use the package.

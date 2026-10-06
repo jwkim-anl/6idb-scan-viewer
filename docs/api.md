@@ -127,6 +127,7 @@ Rectangles on the detector, and what they reduce each frame to.
   - properties: `rotated`
   - `.from_roi(cls, roi)` — From a pyqtgraph ROI, so the windows can hand one straight over.
   - `.from_stored(cls, spec)` — From the dictionaries the files record.
+  - `.corners(self)` — The four corners ``(x, y)``, going round, for drawing the rectangle.
   - `.bbox(self, shape)` — Axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*.
   - `.pixel_count(self, shape, frame=None)` — How many pixels it covers -- the N in a ``background x N`` correction.
   - `.sub_frame(self, frame)` — The pixels of one frame inside the rectangle.
@@ -177,7 +178,8 @@ The objects a notebook starts from.
   - properties: `stack`, `n_frames`, `frame_shape`, `rois`
   - `.frame(self, index)` — One frame, indexed ``[x, y]`` as the file stores it.
   - `.channels(self)` — Everything recorded per frame, including the master's own channels.
-  - `.rect(self, roi=0)` — One ROI as a rectangle: an index into :attr:`rois`, or x/y/w/h[/angle].
+  - `.rect(self, roi=0)` — One ROI as a rectangle.
+  - `.show(self, frame=0, rois=None, log=False, ax=None, cmap='viridis', **kwargs)` — One frame with its ROIs drawn on it, so you can place a new one.
   - `.roi_series(self, roi=0)` — Every metric for one ROI, frame by frame.
   - `.roi_curve(self, roi=0, metric='sum', normalise=None, background=None)` — One ROI's metric against frame number.
 - **`HklMap`** — One scan in reciprocal space: the geometry, the cloud, the grid.
@@ -188,4 +190,4 @@ The objects a notebook starts from.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 98 callables, 9 classes -->
+<!-- 100 callables, 9 classes -->

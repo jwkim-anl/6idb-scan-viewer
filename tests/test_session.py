@@ -149,3 +149,55 @@ def test_fields_is_a_table_you_can_choose_axes_from():
         assert names[-1] == "INDEX"
         # curve() still works off the names, not the table
         assert not scan.curve(y="lambda250k_stats1_total").empty
+
+
+def test_a_made_up_roi_reduces_like_a_recorded_one():
+    """The point of the whole thing: your rectangle is worth the file's."""
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=13)
+        write_image(d / "pva_s_00007.h5", frames=13, shape=(16, 16))
+        images = da6idb.open_folder(d)[7].images()
+        stored = images.rois.iloc[0]
+        same = (stored["x"], stored["y"], stored["w"], stored["h"])
+        assert np.array_equal(images.roi_curve(0, "sum").values,
+                              images.roi_curve(same, "sum").values)
+        # tuple, Rect and the stored row as a dict are all the same rectangle
+        assert images.rect(same) == images.rect(dict(stored)) == images.rect(0)
+        mine = (2, 3, 5, 4)
+        check("session/made_up_roi", {
+            k: float(v) for k, v in images.roi_series(mine).iloc[0].items()})
+        assert images.roi_curve(mine, "sum").name == "roi.sum"
+
+
+def test_rect_rejects_what_is_not_a_rectangle():
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=5)
+        write_image(d / "pva_s_00007.h5", frames=5, shape=(16, 16))
+        images = da6idb.open_folder(d)[7].images()
+        for bad, kind in (((1, 2, 3), ValueError), (99, IndexError)):
+            try:
+                images.rect(bad)
+            except kind as error:
+                assert str(error)          # says what to do instead
+            else:
+                raise AssertionError(f"{bad!r} should have raised {kind}")
+
+
+def test_show_draws_the_frame_and_its_rois():
+    import matplotlib
+    matplotlib.use("Agg")
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=7)
+        write_image(d / "pva_s_00007.h5", frames=7, shape=(16, 12))
+        images = da6idb.open_folder(d)[7].images()
+        ax = images.show(0)                       # the recorded ones
+        assert len(ax.patches) == len(images.rois)
+        ax = images.show(1, rois=[(2, 3, 5, 4)], log=True)
+        assert len(ax.patches) == 1
+        assert len(images.show(0, rois=()).patches) == 0
+        # drawn the way the viewer shows it: (x, y) on the axes is frame[x, y]
+        shown = ax.images[0].get_array()
+        frame = images.frame(1)
+        assert all(shown[y, x] == frame[x, y]
+                   for x in (0, 7, 15) for y in (0, 5, 11))
+        assert ax.get_ylim()[0] > ax.get_ylim()[1]    # y runs downwards

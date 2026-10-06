@@ -52,6 +52,24 @@ class Rect:
     def rotated(self) -> bool:
         return abs(float(self.angle)) % 360.0 > 1e-6
 
+    def corners(self) -> np.ndarray:
+        """The four corners ``(x, y)``, going round, for drawing the rectangle.
+
+        The same two axes :meth:`sub_frame` walks, so what is drawn is what is
+        summed -- including the way the angle turns the rectangle about its
+        corner rather than its centre.
+        """
+        radians = np.deg2rad(float(self.angle))
+        along = np.array([np.cos(radians), np.sin(radians)])
+        across = np.array([-np.sin(radians), np.cos(radians)])
+        origin = np.array([float(self.x), float(self.y)])
+        return np.array([
+            origin,
+            origin + self.width * along,
+            origin + self.width * along + self.height * across,
+            origin + self.height * across,
+        ])
+
     def bbox(self, shape) -> tuple[int, int, int, int]:
         """Axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*."""
         nx, ny = int(shape[0]), int(shape[1])

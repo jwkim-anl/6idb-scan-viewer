@@ -4,6 +4,7 @@ import numpy as np
 from helpers import EXAMPLE_IMAGE, Sandbox, check, have_example, write_image, write_master
 
 from da6idb import files, images as iv
+from da6idb.rois import Rect
 
 
 def test_nearest_index_matching():
@@ -93,3 +94,19 @@ def test_example_image():
     check("images/example_channels", sorted(data.channels))
     check("images/example_epoch_span",
           [float(data.epoch[0]), float(data.epoch[-1])] if data.epoch is not None else None)
+
+
+def test_rect_corners_match_the_axes_sub_frame_walks():
+    """What show() draws has to be what series() sums."""
+    rect = Rect(10.0, 20.0, 8.0, 6.0, 30.0)
+    corners = rect.corners()
+    check("images/rect_corners_30deg", np.round(corners, 6).tolist())
+    # corner, then one width along, then one height across: the same two unit
+    # vectors sub_frame steps along, so the drawing cannot drift from the sum
+    assert np.allclose(corners[0], (10.0, 20.0))
+    assert np.isclose(np.hypot(*(corners[1] - corners[0])), 8.0)
+    assert np.isclose(np.hypot(*(corners[3] - corners[0])), 6.0)
+    # square corners, and unrotated it is just the plain box
+    assert np.isclose(np.dot(corners[1] - corners[0], corners[3] - corners[0]), 0.0)
+    plain = Rect(10.0, 20.0, 8.0, 6.0).corners()
+    assert np.allclose(plain, [(10, 20), (18, 20), (18, 26), (10, 26)])

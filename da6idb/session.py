@@ -291,12 +291,80 @@ class Images:
         return pd.DataFrame(self.data.stored_rois)
 
     def rect(self, roi=0) -> Rect:
-        """One ROI as a rectangle: an index into :attr:`rois`, or x/y/w/h[/angle]."""
+        """One ROI as a rectangle.
+
+        Takes an index into :attr:`rois`, one of those rows as a dict, a
+        :class:`~da6idb.rois.Rect`, or a plain ``(x, y, w, h)`` --
+        ``(x, y, w, h, angle)`` to turn it about its corner. Everything that
+        reduces an ROI goes through here, so a rectangle you make up is worth
+        exactly as much as one the detector recorded.
+        """
         if isinstance(roi, Rect):
             return roi
+        if isinstance(roi, dict):
+            return Rect.from_stored(roi)
         if isinstance(roi, (int, np.integer)):
-            return Rect.from_stored(self.data.stored_rois[int(roi)])
-        return Rect(*(float(v) for v in roi))
+            stored = self.data.stored_rois
+            if not -len(stored) <= int(roi) < len(stored):
+                raise IndexError(
+                    f"{self.path.name} records {len(stored)} ROI(s), so {roi} "
+                    "is out of range; pass (x, y, w, h) to make your own"
+                )
+            return Rect.from_stored(stored[int(roi)])
+        values = [float(v) for v in roi]
+        if len(values) not in (4, 5):
+            raise ValueError(
+                "a rectangle is (x, y, w, h) or (x, y, w, h, angle), "
+                f"not {len(values)} value(s)"
+            )
+        return Rect(*values)
+
+    def show(self, frame=0, rois=None, log=False, ax=None, cmap="viridis",
+             **kwargs):
+        """One frame with its ROIs drawn on it, so you can place a new one.
+
+        Oriented like the image viewer -- x across, y down -- and labelled in
+        detector pixels, so a rectangle read off these axes can go straight
+        back in as ``(x, y, w, h)``. *rois* defaults to the ones the file
+        records; pass a list of your own, or ``()`` for a bare frame.
+        Returns the matplotlib axes, to draw on further or save.
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Polygon
+
+        data = np.asarray(self.frame(int(frame)), dtype=float)
+        if log:
+            from matplotlib.colors import LogNorm
+            lit = data[data > 0]
+            kwargs.setdefault("norm", LogNorm(
+                vmin=float(lit.min()) if lit.size else 1.0,
+                vmax=float(data.max()) if lit.size else 1.0))
+        if ax is None:
+            _, ax = plt.subplots(figsize=(5.5, 5.0))
+        # .T because the file stores the frame [x, y] and imshow reads
+        # [row, column]; origin="upper" to match the viewer's inverted y.
+        ax.imshow(data.T, origin="upper", cmap=cmap, **kwargs)
+
+        stored = self.data.stored_rois
+        if rois is None:
+            specs = list(range(len(stored)))
+        elif isinstance(rois, (Rect, dict, int, np.integer)):
+            specs = [rois]
+        else:
+            specs = list(rois)
+        for spec in specs:
+            rect = self.rect(spec)
+            name = (stored[int(spec)].get("name") or f"roi{spec}"
+                    if isinstance(spec, (int, np.integer)) else "new")
+            ax.add_patch(Polygon(rect.corners(), closed=True, fill=False,
+                                 edgecolor="red", linewidth=1.2))
+            ax.annotate(name, rect.corners()[0], color="red", fontsize=8,
+                        xytext=(2, -2), textcoords="offset points",
+                        va="top", ha="left")
+        ax.set_xlabel("X [pixels]")
+        ax.set_ylabel("Y [pixels]")
+        ax.set_title(f"{self.path.name} — frame {frame}", fontsize=9)
+        return ax
 
     def roi_series(self, roi=0) -> pd.DataFrame:
         """Every metric for one ROI, frame by frame.
