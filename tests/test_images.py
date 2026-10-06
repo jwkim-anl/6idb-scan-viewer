@@ -78,9 +78,9 @@ def test_a_mismatched_master_is_refused():
         assert not any(k.startswith("scan/") for k in data.channels)
 
 
-def test_evenly_spaced_index_edges():
+def testevenly_spaced_index_edges():
     check("images/evenly_spaced", {
-        f"{n}->{p}": iv._evenly_spaced_index(n, p)
+        f"{n}->{p}": iv.evenly_spaced_index(n, p)
         for n, p in ((0, 11), (1, 11), (2, 11), (11, 11), (5, 3), (30, 4))
     })
 

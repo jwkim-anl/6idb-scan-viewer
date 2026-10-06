@@ -125,6 +125,7 @@ Cutting a plane through a gridded map.
 The detector's image stack, and everything recorded alongside it.
 
 - `nearest_index(frame_epoch, scan_epoch)` — For each frame, the scan point closest to it in time.
+- `evenly_spaced_index(n_frames, n_scan_points)` — Map each frame onto a scan point by position, not by time.
 - `read_scan_channels(image, frame_epoch, n_frames=None, master=None)` — The master file's primary fields, resampled onto the image's frames.
 - **`ImageData`** — The whole contents of one ``pva*.h5`` file, held in memory.
   - properties: `n_frames`, `frame_shape`
@@ -208,4 +209,4 @@ The objects a notebook starts from.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 112 callables, 9 classes -->
+<!-- 113 callables, 9 classes -->

@@ -85,7 +85,7 @@ def _scan_time_base(group) -> np.ndarray | None:
             return epoch
     return None
 
-def _evenly_spaced_index(n_frames: int, n_scan_points: int) -> np.ndarray:
+def evenly_spaced_index(n_frames: int, n_scan_points: int) -> np.ndarray:
     """Map each frame onto a scan point by position, not by time.
 
     Used only when the image file has no per-frame timestamp to match against
@@ -137,7 +137,7 @@ def read_scan_channels(
 
     When the image file carries no per-frame timestamp at all, there is no
     clock to match against, so frames are instead spread evenly across the
-    master's scan points by position (see ``_evenly_spaced_index``) -- a
+    master's scan points by position (see ``evenly_spaced_index``) -- a
     rougher alignment, but the best available without a time base.
     """
     have_epoch = frame_epoch is not None and len(frame_epoch) > 0
@@ -171,7 +171,7 @@ def read_scan_channels(
                 n_scan_points = _scan_point_count(group)
                 if not n_scan_points:
                     return {}
-                index = _evenly_spaced_index(n_frames, n_scan_points)
+                index = evenly_spaced_index(n_frames, n_scan_points)
 
             channels: dict[str, np.ndarray] = {}
             for name in group.keys():

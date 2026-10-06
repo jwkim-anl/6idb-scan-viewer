@@ -21,7 +21,8 @@ import numpy as np
 import h5py
 
 from da6idb.files import IMAGE_DATA_PATH, MASTER_PRIMARY_PATH, master_path_for_image
-from da6idb.images import FRAME_TIMESTAMP_PATH, nearest_index
+from da6idb.images import (FRAME_TIMESTAMP_PATH, evenly_spaced_index,
+                          nearest_index)
 
 HKL_PATH = "entry/data/metadata/HKL"
 
@@ -274,7 +275,7 @@ def _read_master_geometry(
         if not take_angles:
             return
         primary = f.get(MASTER_PRIMARY_PATH)
-        if primary is None or frame_epoch is None:
+        if primary is None:
             return
         angles, clock = {}, None
         for name in (*SAMPLE_MOTORS, *DETECTOR_MOTORS):
@@ -295,12 +296,27 @@ def _read_master_geometry(
                     and np.all(np.diff(epoch) >= 0)
                 ):
                     clock = epoch
-        if clock is None or any(v.size != clock.size for v in angles.values()):
+        sizes = {int(v.size) for v in angles.values()}
+        if len(sizes) != 1 or sizes == {0}:
             return
-        index = nearest_index(np.asarray(frame_epoch, dtype=float), clock)
+        points = sizes.pop()
+
+        if frame_epoch is not None and clock is not None and clock.size == points:
+            index = nearest_index(np.asarray(frame_epoch, dtype=float), clock)
+            source = "master"
+        else:
+            # Some image files carry nothing but the stack -- no per-frame
+            # timestamp to match on, and sometimes no usable clock in the
+            # master either. The angles are still there, one per scan point,
+            # so spread the frames over them by position, exactly as
+            # ``read_scan_channels`` does for the scan's other channels.
+            index = evenly_spaced_index(geometry.n_frames, points)
+            source = "master (by position)"
+        if index.size != geometry.n_frames:
+            return
         geometry.sample_angles = np.vstack([angles[n][index] for n in SAMPLE_MOTORS])
         geometry.detector_angles = np.vstack([angles[n][index] for n in DETECTOR_MOTORS])
-        mark["angles"] = "master"
+        mark["angles"] = source
 
 def _as_floats(value, count):
     values = [float(v) for v in np.asarray(value, dtype=float).ravel()]

@@ -189,3 +189,65 @@ def test_two_theta_follows_both_circles_not_just_delta():
     # offset alone would say -- which is what delta on its own would miss
     vertical_only = float(dt.two_theta_at(g, *g.center_pixel, hxrd=None)[0])
     assert float(dt.two_theta_at(g, 470.0, g.center_pixel[1])[0]) > vertical_only
+
+
+def _master_with_angles(path, points=5, delta=36.1):
+    """A master carrying the full set of diffractometer angles."""
+    import numpy as np
+    from helpers import write_master
+    angles = {
+        "psic_mu": np.zeros(points),
+        "psic_eta": np.linspace(17.0, 18.0, points),
+        "psic_chi": np.full(points, 90.0),
+        "psic_phi": np.zeros(points),
+        "psic_nu": np.zeros(points),
+        "psic_delta": np.full(points, delta),
+    }
+    write_master(path, points=points, extra_primary=angles)
+    return angles
+
+
+def test_angles_come_from_the_master_when_the_image_has_none():
+    """Some image files hold nothing but the stack -- no angles, no clock."""
+    from helpers import write_image
+    with Sandbox() as d:
+        angles = _master_with_angles(d / "s_00007_master.hdf", points=5)
+        write_image(d / "pva_s_00007.h5", frames=5, shape=(8, 8),
+                    timestamps=False, rois=False)
+        g = hv.read_geometry(d / "pva_s_00007.h5")
+        assert g.sources["angles"] == "master (by position)"
+        assert np.allclose(g.detector_angles[1], angles["psic_delta"])
+        assert np.allclose(g.sample_angles[1], angles["psic_eta"])
+        # one frame per scan point, so the mapping is one to one
+        assert g.detector_angles.shape == (2, 5)
+
+
+def test_angles_by_position_spread_over_a_different_frame_count():
+    from helpers import write_image
+    with Sandbox() as d:
+        angles = _master_with_angles(d / "s_00007_master.hdf", points=5)
+        write_image(d / "pva_s_00007.h5", frames=9, shape=(8, 8),
+                    timestamps=False, rois=False)
+        g = hv.read_geometry(d / "pva_s_00007.h5")
+        assert g.sources["angles"] == "master (by position)"
+        assert g.sample_angles.shape == (4, 9)
+        # first frame on the first point, last on the last, the rest between
+        assert np.isclose(g.sample_angles[1][0], angles["psic_eta"][0])
+        assert np.isclose(g.sample_angles[1][-1], angles["psic_eta"][-1])
+        assert np.all(np.diff(g.sample_angles[1]) >= 0)
+
+
+def test_a_timed_image_still_matches_the_master_on_the_clock():
+    """The fallback must not take over where there is a clock to match on."""
+    from helpers import write_image
+    with Sandbox() as d:
+        _master_with_angles(d / "s_00007_master.hdf", points=5)
+        write_image(d / "pva_s_00007.h5", frames=5, shape=(8, 8), rois=False)
+        g = hv.read_geometry(d / "pva_s_00007.h5")
+        assert g.sources["angles"] == "master"
+
+
+def test_the_example_still_takes_its_angles_from_the_image():
+    if not have_example():
+        return
+    assert hv.read_geometry(EXAMPLE_IMAGE).sources["angles"] == "image"
