@@ -352,10 +352,18 @@ class Images:
             specs = [rois]
         else:
             specs = list(rois)
-        for spec in specs:
+        # The recorded ones have names; number the rest, so a signal box and
+        # a background box do not both come out labelled "new".
+        made_up = [i for i, spec in enumerate(specs)
+                   if not isinstance(spec, (int, np.integer))]
+        for position, spec in enumerate(specs):
             rect = self.rect(spec)
-            name = (stored[int(spec)].get("name") or f"roi{spec}"
-                    if isinstance(spec, (int, np.integer)) else "new")
+            if isinstance(spec, (int, np.integer)):
+                name = stored[int(spec)].get("name") or f"roi{spec}"
+            elif len(made_up) == 1:
+                name = "new"
+            else:
+                name = f"new{made_up.index(position) + 1}"
             ax.add_patch(Polygon(rect.corners(), closed=True, fill=False,
                                  edgecolor="red", linewidth=1.2))
             ax.annotate(name, rect.corners()[0], color="red", fontsize=8,

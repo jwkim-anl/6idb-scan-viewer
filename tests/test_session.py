@@ -201,3 +201,22 @@ def test_show_draws_the_frame_and_its_rois():
         assert all(shown[y, x] == frame[x, y]
                    for x in (0, 7, 15) for y in (0, 5, 11))
         assert ax.get_ylim()[0] > ax.get_ylim()[1]    # y runs downwards
+
+
+def test_show_names_the_rois_it_draws():
+    """A signal box and a background box must not both read "new"."""
+    import matplotlib
+    matplotlib.use("Agg")
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=5)
+        write_image(d / "pva_s_00007.h5", frames=5, shape=(16, 12))
+        images = da6idb.open_folder(d)[7].images()
+        labels = lambda ax: [t.get_text() for t in ax.texts]
+        assert labels(images.show(0, rois=[(1, 1, 4, 4)])) == ["new"]
+        assert labels(images.show(0, rois=[(1, 1, 4, 4), (1, 6, 4, 4)])) == [
+            "new1", "new2"]
+        # the recorded ones keep the names the file gave them
+        recorded = labels(images.show(0))
+        assert recorded == list(images.rois["name"])
+        assert labels(images.show(0, rois=[0, (1, 1, 4, 4)])) == [
+            recorded[0], "new"]
