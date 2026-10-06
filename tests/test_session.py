@@ -310,3 +310,40 @@ def test_two_theta_background_moves_it_towards_the_feature():
     peak = float(images.two_theta_angles(spot, background=empty).iloc[
         int(images.roi_curve(spot, "sum", background=empty).idxmax())])
     assert abs(clean - peak) < abs(raw - peak)
+
+
+def test_background_can_flip_which_side_of_the_circle_the_angle_lands():
+    """The trap: a raw centre of mass follows the box, not the feature.
+
+    Background spread evenly over a region has its centre of mass at the
+    region's own centre. When that centre is on the opposite side of the
+    detector's centre pixel from the feature, and the background is most of
+    what the box holds, the reported angle comes out the wrong side of the
+    circle reading -- above it while the spot is plainly below.
+    """
+    from da6idb.hkl.geometry import HklGeometry
+    with Sandbox() as d:
+        write_master(d / "s_00007_master.hdf", points=1)
+        write_image(d / "pva_s_00007.h5", frames=1, shape=(16, 16))
+        images = da6idb.open_folder(d)[7].images()
+        stack = np.full((1, 16, 16), 20.0, dtype=np.float32)
+        stack[0, 7, 8] += 80.0                 # a weak feature just below centre
+        images.data.stack = stack
+        images._geometry = HklGeometry(
+            image_path=images.path, master_path=None, frame_shape=(16, 16),
+            n_frames=1, distance=1000.0, detector_size=(16.0, 16.0),
+            center_pixel=(8.0, 7.0),
+            detector_angles=np.array([[0.0], [10.0]]))
+        images._converter = None
+
+        box = (5, 4, 6, 6)        # y 4-10, centre 6.5: above the centre pixel
+        empty = (5, 11, 6, 4)     # pure background
+        patch = stack[0, 5:11, 4:10]
+        assert 20 * patch.size / patch.sum() > 0.85      # background dominates
+
+        raw = float(images.two_theta_angles(box)[0])
+        clean = float(images.two_theta_angles(box, background=empty)[0])
+        assert raw > 10.0, raw          # follows the box, the wrong side
+        assert clean < 10.0, clean      # follows the feature, which is below
+        check("session/two_theta_background_flip",
+              {"raw": round(raw, 6), "corrected": round(clean, 6)})
