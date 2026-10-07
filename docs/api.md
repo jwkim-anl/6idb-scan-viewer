@@ -119,6 +119,7 @@ Cutting a plane through a gridded map.
 - `slab_offsets(layers)` — Offsets, in cells, of a slab of *layers* planes centred on zero.
 - `sample_volume(grid, points)` — Trilinear values of *grid* at arbitrary HKL points; NaN off the grid.
 - `average_along_normal(grid, points, normal, layers=1, step=None)` — Average *grid* over a slab of *layers* cells centred on *points*.
+- `line_cut(grid, start, end, samples=None, width=1, normal=None, step=None)` — Intensity along the segment from *start* to *end*, both in HKL.
 - `sample_plane(grid, normal, origin, pixels=None, layers=1)` — Resample *grid* on the plane. Returns (image, us, vs, u, v, origin).
 
 ### `da6idb.images`
@@ -209,5 +210,6 @@ The objects a notebook starts from.
   - `.extent(self)` — The H, K, L box the scan actually reaches.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
+  - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 114 callables, 9 classes -->
+<!-- 116 callables, 9 classes -->

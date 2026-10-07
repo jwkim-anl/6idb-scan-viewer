@@ -400,3 +400,31 @@ def test_slice_leaves_unmeasured_cells_blank():
                        dtype=float)
     assert np.isnan(thick).mean() <= empty.mean() + 0.01
     assert np.nanmax(thick) > 0
+
+
+def test_cut_between_two_hkl_points():
+    if not have_example():
+        return
+    hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+    hkl.grid(oversample=6.0)
+    start, end = (0.96, -0.50, 7.52), (1.14, -0.50, 7.52)
+    cut = hkl.cut(start, end)
+    assert list(cut.columns) == ["distance", "H", "K", "L", "intensity"]
+    assert np.isclose(cut["distance"].iloc[0], 0.0)
+    assert np.isclose(cut["distance"].iloc[-1], np.linalg.norm(
+        np.array(end) - np.array(start)))
+    # the line was asked for along H at fixed K and L, so that is where it ran
+    assert np.allclose(cut["K"], -0.50) and np.allclose(cut["L"], 7.52)
+    assert cut.attrs["start"] == list(start) and cut.attrs["end"] == list(end)
+    check("session/cut_shape", {"rows": len(cut),
+                                "measured": int(cut["intensity"].notna().sum())})
+
+    # width averages, and keeps the cut on the plane when given its normal
+    wide = hkl.cut(start, end, width=5, normal=(0, 0, 1))
+    assert len(wide) == len(cut)
+    assert np.allclose(wide["L"], 7.52)        # the widening stayed in-plane
+    assert wide["intensity"].std() < cut["intensity"].std()   # and smoothed it
+
+    # a cut that leaves the measured volume is NaN there, not an error
+    away = hkl.cut((5.0, 5.0, 5.0), (5.1, 5.0, 5.0))
+    assert away["intensity"].isna().all()

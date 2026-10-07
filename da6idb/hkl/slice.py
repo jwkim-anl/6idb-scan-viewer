@@ -110,6 +110,68 @@ def average_along_normal(grid, points, normal, layers=1, step=None):
     ]
     return np.ma.masked_invalid(np.vstack(stack)).mean(axis=0)
 
+def line_cut(grid, start, end, samples=None, width=1, normal=None, step=None):
+    """Intensity along the segment from *start* to *end*, both in HKL.
+
+    The two points name the cut outright, which is what you want when the
+    line runs between features whose H, K, L you know -- dragging one into
+    place by eye cannot be written down or repeated.
+
+    *width* averages that many parallel lines, spaced *step* apart and
+    centred on the segment, the way a slab average thickens a plane. Their
+    offset direction is perpendicular to the line and, when *normal* is
+    given, inside that plane, so widening a cut on a slice stays on the
+    slice instead of wandering out of it.
+
+    Returns ``(distance, points, values)``: distance from *start* in HKL
+    units, the ``(n, 3)`` H, K, L of each sample, and the intensity there,
+    NaN wherever the scan did not reach.
+    """
+    start = np.asarray(start, float).reshape(3)
+    end = np.asarray(end, float).reshape(3)
+    direction = end - start
+    length = float(np.linalg.norm(direction))
+    if length <= 0:
+        raise ValueError("the two ends of the cut are the same point")
+    unit = direction / length
+    if step is None:
+        step = float(np.min(np.abs(np.asarray(grid.spacing, float))))
+    step = float(step) if step > 0 else 1.0
+
+    count = int(samples) if samples else int(np.ceil(length / step)) + 1
+    count = int(np.clip(count, 2, MAX_PIXELS))
+    distance = np.linspace(0.0, length, count)
+    points = start[None, :] + distance[:, None] * unit[None, :]
+
+    width = max(1, int(width))
+    if width == 1:
+        values = np.ma.filled(
+            np.ma.masked_invalid(sample_volume(grid, points)), np.nan)
+        return distance, points, values
+
+    if normal is not None:
+        across = np.cross(np.asarray(normal, float), unit)
+    else:
+        # Any perpendicular will do: start from the axis the line leans on
+        # least, so the subtraction cannot collapse to zero.
+        seed = np.eye(3)[int(np.argmin(np.abs(unit)))]
+        across = seed - unit * float(np.dot(seed, unit))
+    size = float(np.linalg.norm(across))
+    if size < 1e-12:
+        raise ValueError("the cut runs along its own plane normal")
+    across = across / size
+
+    stack = [
+        sample_volume(grid, points + across[None, :] * (offset * step))
+        for offset in slab_offsets(width)
+    ]
+    # Masked, not nanmean: where the line leaves the measured volume every
+    # offset is NaN, and nanmean warns on each one.
+    values = np.ma.filled(
+        np.ma.masked_invalid(np.vstack(stack)).mean(axis=0), np.nan)
+    return distance, points, np.asarray(values, float)
+
+
 def sample_plane(grid, normal, origin, pixels=None, layers=1):
     """Resample *grid* on the plane. Returns (image, us, vs, u, v, origin).
 

@@ -31,6 +31,7 @@ import matplotlib.patheffects as pe
 from da6idb import export
 from da6idb.hkl.slice import MAX_PIXELS, _axis_index, sample_plane
 from volume_style import AXIS_NAMES
+from volume_style import spin as _spin
 
 
 # How far below the top of the scale a log plot reaches when no floor is set.
@@ -162,6 +163,33 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
         self.line_label.hide()
         layout.addWidget(self.line_label)
 
+        # The same two ends, typed. Dragging is quick but cannot be written
+        # down or repeated on the next scan; a cut between two features whose
+        # H, K, L are known should be stated, not aimed at by hand.
+        self._updating_ends = False
+        self.line_ends = QtWidgets.QWidget()
+        ends = QtWidgets.QHBoxLayout(self.line_ends)
+        ends.setContentsMargins(0, 0, 0, 0)
+        ends.setSpacing(3)
+        self._line_end_spins = []
+        for which in ("From", "To"):
+            ends.addWidget(QtWidgets.QLabel(which))
+            row = []
+            for name in AXIS_NAMES:
+                ends.addWidget(QtWidgets.QLabel(name))
+                box = _spin(0.0, -1e6, 1e6, 4, 0.005, 76)
+                box.setToolTip(
+                    f"{name} of the {which.lower()} end of the cut.\n"
+                    "Off the plane is fine -- it is projected onto it."
+                )
+                box.valueChanged.connect(self._line_ends_edited)
+                ends.addWidget(box)
+                row.append(box)
+            self._line_end_spins.append(row)
+        ends.addStretch(1)
+        self.line_ends.hide()
+        layout.addWidget(self.line_ends)
+
         self.figure = Figure(figsize=(6.4, 5.8), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.ax = self.figure.add_subplot(111)
@@ -251,6 +279,23 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
             along_v = (y - corner[y_index]) / y_scale if y_index is not None else y
             return corner + along_u * u + along_v * v
 
+        def from_hkl(point):
+            """Plot coordinates of an H, K, L -- the inverse of ``to_hkl``.
+
+            A point off the plane has no place on this image, so it is
+            projected onto it: only the parts along u and v survive. That is
+            what makes typing an end of the cut forgiving, since an H, K, L
+            read off a 3D view is rarely exactly on the plane.
+            """
+            delta = np.asarray(point, dtype=float) - corner
+            along_u = float(np.dot(delta, u))
+            along_v = float(np.dot(delta, v))
+            x = (corner[x_index] + along_u * x_scale
+                 if x_index is not None else along_u)
+            y = (corner[y_index] + along_v * y_scale
+                 if y_index is not None else along_v)
+            return float(x), float(y)
+
         # Cells the scan never reached come back as the fill value; leave them
         # blank rather than painting them the bottom colour of the map.
         shown = np.ma.masked_invalid(image)
@@ -268,6 +313,7 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
             zero_shown=zero_shown,
             zero_hkl=np.asarray(corner, float),
             to_hkl=to_hkl,
+            from_hkl=from_hkl,
             cmap=cmap,
             clim=clim,
         )
@@ -526,9 +572,38 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
                 "line end     H %9.4f   K %9.4f   L %9.4f     length %.4f"
                 % (*start, *end, length)
             )
+            self._show_line_ends(start, end)
         self.line_label.setVisible(mode == CUT_LINE)
+        self.line_ends.setVisible(mode == CUT_LINE)
         self.export_cut_button.setEnabled(mode != CUT_NONE)
         self.status.showMessage(message)
+
+    def _show_line_ends(self, start, end):
+        """Put the drawn line's ends into the boxes, without echoing back."""
+        self._updating_ends = True
+        try:
+            for row, point in zip(self._line_end_spins, (start, end)):
+                for box, value in zip(row, point):
+                    box.setValue(float(value))
+        finally:
+            self._updating_ends = False
+
+    def _line_ends_edited(self):
+        """Move the line to the typed ends."""
+        if self._updating_ends or self._data is None:
+            return
+        from_hkl = self._data.get("from_hkl")
+        if from_hkl is None:
+            return
+        ends = tuple(from_hkl([box.value() for box in row])
+                     for row in self._line_end_spins)
+        if ends[0] == ends[1]:
+            return                      # a line of no length has no profile
+        self._line = ends
+        if self._mode() != CUT_LINE:
+            self.cut_combo.setCurrentText(CUT_LINE)   # redraws
+        else:
+            self._redraw()
 
     def _refresh_line(self):
         """Move the drawn line and its profile without rebuilding the figure."""

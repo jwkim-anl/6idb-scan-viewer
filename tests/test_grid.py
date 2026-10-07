@@ -156,3 +156,57 @@ def test_plane_origin_from_an_offset_or_from_a_point():
         assert "zero" in str(error)
     else:
         raise AssertionError("a zero normal should have been refused")
+
+
+def _toy_cube(values, origin=(0.0, 0.0, 0.0), spacing=(0.1, 0.1, 0.1)):
+    """A small lattice with values we chose, to cut through."""
+    import pyvista as pv
+    cube = pv.ImageData(dimensions=values.shape, origin=origin, spacing=spacing)
+    cube.point_data["intensity"] = values.ravel(order="F")
+    return cube
+
+
+def test_line_cut_between_two_points():
+    from da6idb.hkl.slice import line_cut
+    # a ramp along H, flat in K and L, so the cut's values are predictable
+    h = np.arange(11, dtype=float)[:, None, None] * np.ones((11, 5, 5))
+    cube = _toy_cube(h.astype(np.float32))
+
+    distance, points, values = line_cut(cube, (0.0, 0.2, 0.2), (1.0, 0.2, 0.2))
+    assert np.isclose(distance[0], 0.0) and np.isclose(distance[-1], 1.0)
+    assert np.allclose(points[:, 1], 0.2) and np.allclose(points[:, 2], 0.2)
+    # H runs 0 to 1 over 10 cells of 0.1, and the value is the cell index
+    assert np.allclose(values, points[:, 0] / 0.1, atol=1e-5)
+
+    # the ends name the cut: reversing them reverses the profile
+    _d, _p, back = line_cut(cube, (1.0, 0.2, 0.2), (0.0, 0.2, 0.2))
+    assert np.allclose(back, values[::-1], atol=1e-5)
+
+    # off the lattice is NaN, not an error or a clamp
+    _d, _p, outside = line_cut(cube, (0.0, 0.2, 9.0), (1.0, 0.2, 9.0))
+    assert np.isnan(outside).all()
+
+    try:
+        line_cut(cube, (0.5, 0.2, 0.2), (0.5, 0.2, 0.2))
+    except ValueError as error:
+        assert "same point" in str(error)
+    else:
+        raise AssertionError("a zero-length cut should have been refused")
+
+
+def test_line_cut_width_averages_across_the_line():
+    from da6idb.hkl.slice import line_cut
+    # flat everywhere except one bright plane at K = index 2
+    values = np.zeros((11, 5, 5), dtype=np.float32)
+    values[:, 2, :] = 90.0
+    cube = _toy_cube(values)
+
+    start, end = (0.2, 0.2, 0.2), (0.8, 0.2, 0.2)
+    _d, _p, narrow = line_cut(cube, start, end, width=1)
+    assert np.allclose(narrow, 90.0)
+    # widening across K (the slice normal being L) pulls in the dark rows
+    _d, _p, wide = line_cut(cube, start, end, width=3, normal=(0.0, 0.0, 1.0))
+    assert np.allclose(wide, 30.0), wide[:3]
+    # with the normal along K instead, the widening stays on the bright plane
+    _d, _p, inplane = line_cut(cube, start, end, width=3, normal=(0.0, 1.0, 0.0))
+    assert np.allclose(inplane, 90.0)

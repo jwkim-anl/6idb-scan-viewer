@@ -645,6 +645,35 @@ class HklMap:
                                    "point": [float(c) for c in origin],
                                    "layers": int(layers)})
 
+    def cut(self, start, end, samples=None, width=1, normal=None,
+            **kwargs) -> pd.DataFrame:
+        """Intensity along the line between two H, K, L points.
+
+        The cut is named by its two ends rather than drawn by hand, so it
+        can be written down, repeated on the next scan, and read back from
+        the table it returns. *width* averages that many parallel lines
+        either side, and *normal* -- the slice's own normal -- keeps that
+        widening inside the plane.
+
+        Cuts the lattice :meth:`grid` last built, like :meth:`slice`.
+        Returns one row per sample: distance from *start*, the H, K, L
+        there, and the intensity, NaN where the scan did not reach.
+        """
+        settings = {**self._lattice, **kwargs}
+        cube, _path, _made = _grid.ensure_grid(
+            self.path, self.master, geometry=self.geometry, **settings)
+        distance, points, values = _slice.line_cut(
+            cube, start, end, samples=samples, width=width, normal=normal)
+        frame = pd.DataFrame({
+            "distance": distance,
+            "H": points[:, 0], "K": points[:, 1], "L": points[:, 2],
+            "intensity": values,
+        })
+        frame.attrs.update(start=[float(v) for v in np.asarray(start, float)],
+                           end=[float(v) for v in np.asarray(end, float)],
+                           width=int(max(1, width)))
+        return frame
+
     def __repr__(self):
         return (f"<HklMap {self.path.name} — {self.geometry.n_frames} frames, "
                 f"angles from {self.geometry.sources.get('angles')}>")
