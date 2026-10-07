@@ -115,6 +115,7 @@ Bin a pva detector stack onto a regular HKL grid and save it as ``.vti``.
 Cutting a plane through a gridded map.
 
 - `plane_basis(normal)` — Two in-plane directions for *normal*, preferring the HKL axes.
+- `plane_origin(centre, normal, offset=0.0, point=None)` — Where the cutting plane sits, from an offset or from a point on it.
 - `slab_offsets(layers)` — Offsets, in cells, of a slab of *layers* planes centred on zero.
 - `sample_volume(grid, points)` — Trilinear values of *grid* at arbitrary HKL points; NaN off the grid.
 - `average_along_normal(grid, points, normal, layers=1, step=None)` — Average *grid* over a slab of *layers* cells centred on *points*.
@@ -207,6 +208,6 @@ The objects a notebook starts from.
   - `.resolution(self)` — The cell the sampling supports, and what it was measured from.
   - `.extent(self)` — The H, K, L box the scan actually reaches.
   - `.grid(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)` — Bin onto a regular lattice and hand back a labelled cube.
-  - `.slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
+  - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
 
-<!-- 113 callables, 9 classes -->
+<!-- 114 callables, 9 classes -->

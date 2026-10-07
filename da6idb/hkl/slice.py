@@ -49,6 +49,30 @@ def plane_basis(normal):
     v = np.cross(normal, u)
     return u, v / np.linalg.norm(v)
 
+def plane_origin(centre, normal, offset=0.0, point=None):
+    """Where the cutting plane sits, from an offset or from a point on it.
+
+    An offset is measured from *centre* along the unit normal, which is fine
+    for sweeping a plane through a map but awkward when you already know the
+    H, K, L you want to cut through: naming the *point* places the plane
+    directly, and the plane is then the one through it.
+
+    Returns ``(origin, offset)`` either way -- the second being how far the
+    plane ended up from *centre* -- so a viewer can always show both
+    descriptions of the same plane, whichever was typed.
+    """
+    normal = np.asarray(normal, float)
+    length = float(np.linalg.norm(normal))
+    if length < 1e-12:
+        raise ValueError("the plane normal is zero")
+    normal = normal / length
+    centre = np.asarray(centre, float)
+    if point is None:
+        return centre + normal * float(offset), float(offset)
+    point = np.asarray(point, float)
+    return point, float(np.dot(point - centre, normal))
+
+
 def slab_offsets(layers):
     """Offsets, in cells, of a slab of *layers* planes centred on zero."""
     layers = max(1, int(layers))

@@ -347,3 +347,28 @@ def test_background_can_flip_which_side_of_the_circle_the_angle_lands():
         assert clean < 10.0, clean      # follows the feature, which is below
         check("session/two_theta_background_flip",
               {"raw": round(raw, 6), "corrected": round(clean, 6)})
+
+
+def test_slice_can_be_placed_by_a_point_on_it():
+    if not have_example():
+        return
+    hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+    coarse = dict(oversample=6.0)
+    by_offset = hkl.slice(normal=(0, 0, 1), offset=0.0, **coarse)
+    centre_l = float(by_offset.attrs["point"][2])
+
+    point = (1.04, -0.49, centre_l - 0.02)
+    by_point = hkl.slice(normal=(0, 0, 1), point=point, **coarse)
+    assert np.allclose(by_point.attrs["point"], point)
+    assert np.isclose(by_point.attrs["offset"], -0.02)
+    # the same plane asked for the other way round must give the same image
+    same = hkl.slice(normal=(0, 0, 1), offset=-0.02, **coarse)
+    assert np.isclose(float(same.attrs["point"][2]), point[2])
+    a = np.asarray(by_point); b = np.asarray(same)
+    assert a.shape == b.shape
+    assert np.allclose(a, b, equal_nan=True)
+
+    # tilted: the plane's own coordinates are measured from the point given
+    tilted = hkl.slice(normal=(1, 1, 2), point=point, **coarse)
+    assert np.allclose(tilted.attrs["point"], point)
+    assert all(name.startswith("along [") for name in tilted.dims)

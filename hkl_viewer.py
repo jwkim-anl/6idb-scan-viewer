@@ -53,6 +53,7 @@ from volume_style import BACKGROUNDS
 from volume_style import COLORMAPS
 from volume_style import theme
 from volume_style import spin as _spin
+from volume_style import PlanePlacement
 
 from da6idb.hkl.convert import HklCloud, convert
 from da6idb.hkl.geometry import (
@@ -655,12 +656,9 @@ class HklWindow(QtWidgets.QMainWindow):
         preset_widget.setLayout(preset_row)
         form.addRow("", preset_widget)
 
-        self.slice_offset_spin = _spin(0.0, -1e6, 1e6, 4, 0.005)
-        self.slice_offset_spin.setToolTip(
-            "How far the plane sits from the centre of the map, along its normal."
-        )
-        self.slice_offset_spin.valueChanged.connect(self.refresh_view)
-        form.addRow("Offset along normal", self.slice_offset_spin)
+        self.slice_placement = PlanePlacement(0.005)
+        self.slice_placement.changed.connect(self.refresh_view)
+        form.addRow(self.slice_placement)
         self.slice_width_spin = _spin(0.01, 1e-6, 1e6, 5, 0.005)
         self.slice_width_spin.valueChanged.connect(self.refresh_view)
         form.addRow("Slice thickness", self.slice_width_spin)
@@ -811,8 +809,9 @@ class HklWindow(QtWidgets.QMainWindow):
         locked, and everything about it while the slice is hidden."""
         shown = self.show_slice_check.isChecked()
         movable = shown and not self.slice_lock_check.isChecked()
-        for spin in (*self.slice_normal_spins, self.slice_offset_spin):
+        for spin in self.slice_normal_spins:
             spin.setEnabled(movable)
+        self.slice_placement.setEnabled(movable)
         for widget in self._slice_preset_buttons:
             widget.setEnabled(movable)
         self.slice_width_spin.setEnabled(shown)
@@ -831,7 +830,7 @@ class HklWindow(QtWidgets.QMainWindow):
         try:
             for index, spin in enumerate(self.slice_normal_spins):
                 spin.setValue(1.0 if index == axis else 0.0)
-            self.slice_offset_spin.setValue(0.0)
+            self.slice_placement.set_offset(0.0)
         finally:
             self._updating = False
         self.refresh_view()
@@ -847,14 +846,17 @@ class HklWindow(QtWidgets.QMainWindow):
         if length < 1e-12:
             normal, length = np.array([0.0, 0.0, 1.0]), 1.0
         normal = normal / length
-        centre = self._cloud_centre()
-        return normal, centre + normal * self.slice_offset_spin.value()
+        origin, _offset = self.slice_placement.origin_and_offset(
+            self._cloud_centre(), normal)
+        return normal, origin
 
     def _show_unit_normal(self):
         normal, _ = self.slice_plane()
         self.slice_unit_label.setText(
             "unit:  %.3f, %.3f, %.3f" % tuple(normal)
         )
+        # Keeps the offset and the point agreeing, and both on screen.
+        self.slice_placement.refresh(self._cloud_centre(), normal)
 
     def _cloud_centre(self):
         bounds = None if self.cloud is None else self.cloud.bounds()
@@ -892,7 +894,7 @@ class HklWindow(QtWidgets.QMainWindow):
         span = max(high - low for low, high in bounds)
         self._updating = True
         try:
-            self.slice_offset_spin.setValue(0.0)
+            self.slice_placement.set_offset(0.0)
             self.slice_width_spin.setValue(max(float(span) / 50, 1e-5))
         finally:
             self._updating = False
@@ -1003,7 +1005,7 @@ class HklWindow(QtWidgets.QMainWindow):
         try:
             for spin, value in zip(self.slice_normal_spins, normal):
                 spin.setValue(float(value))
-            self.slice_offset_spin.setValue(offset)
+            self.slice_placement.set_offset(offset)
         finally:
             self._updating = False
         # The guard above suppressed refresh_view, which is what normally keeps

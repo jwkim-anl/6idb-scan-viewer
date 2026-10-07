@@ -26,6 +26,7 @@ from PyQt5 import QtWidgets
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from matplotlib.figure import Figure
+import matplotlib.patheffects as pe
 
 from da6idb import export
 from da6idb.hkl.slice import MAX_PIXELS, _axis_index, sample_plane
@@ -222,6 +223,14 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
 
         x_label, x_coords, x_index, x_scale = describe(u, us)
         y_label, y_coords, y_index, y_scale = describe(v, vs)
+        # An axis that does not run along H, K or L is labelled with its
+        # direction and read in plain distance, which says how far but not
+        # from where. That zero is the plane's own origin, so carry where it
+        # lands on these axes and mark it: without it the numbers on a
+        # tilted cut cannot be turned back into an H, K, L by eye.
+        zero_at = (0.0 if x_index is None else float(corner[x_index]),
+                   0.0 if y_index is None else float(corner[y_index]))
+        zero_shown = x_index is None or y_index is None
         # imshow needs increasing axes; a mirrored basis would give decreasing.
         if x_coords[0] > x_coords[-1]:
             x_coords, image = x_coords[::-1], image[:, ::-1]
@@ -255,6 +264,9 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
             x_label=x_label,
             y_label=y_label,
             title=title,
+            zero_at=zero_at,
+            zero_shown=zero_shown,
+            zero_hkl=np.asarray(corner, float),
             to_hkl=to_hkl,
             cmap=cmap,
             clim=clim,
@@ -365,6 +377,25 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
 
     # -- drawing -----------------------------------------------------------
 
+    def _mark_origin(self, ax, data):
+        """Show which H, K, L the tilted axes measure from.
+
+        Only drawn when an axis is not along H, K or L: when both are, every
+        tick already is an H, K or L and there is nothing to anchor.
+        """
+        x, y = data["zero_at"]
+        h, k, l = data["zero_hkl"]
+        ax.plot([x], [y], marker="+", ms=9, mew=1.4, color="white",
+                zorder=5, clip_on=True)
+        ax.plot([x], [y], marker="+", ms=9, mew=0.6, color="black",
+                zorder=6, clip_on=True)
+        ax.annotate(
+            "0 = (%.4f, %.4f, %.4f)" % (h, k, l),
+            (x, y), textcoords="offset points", xytext=(6, 5),
+            fontsize=7.5, color="white", zorder=7, clip_on=True,
+            path_effects=[pe.withStroke(linewidth=1.8, foreground="black")],
+        )
+
     def _norm(self, data, clim):
         """Colour scaling, linear or logarithmic."""
         from matplotlib.colors import LogNorm
@@ -414,6 +445,8 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
         ax.set_xlabel(data["x_label"])
         ax.set_ylabel(data["y_label"])
         ax.set_title(data["title"], fontsize=10)
+        if data.get("zero_shown"):
+            self._mark_origin(ax, data)
 
         # append_axes keeps these lined up with the image even though it is
         # drawn at a fixed aspect, which a plain gridspec would not.

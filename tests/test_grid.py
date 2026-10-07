@@ -130,3 +130,29 @@ def test_plane_basis_prefers_the_axes():
     u, v = sp.plane_basis((1, 1, 0))
     assert abs(float(np.dot(u, v))) < 1e-12, "the basis must stay orthogonal"
     check("grid/slab_offsets", {n: sp.slab_offsets(n) for n in (1, 2, 5)})
+
+
+def test_plane_origin_from_an_offset_or_from_a_point():
+    from da6idb.hkl.slice import plane_origin
+    centre = np.array([1.0, -0.5, 7.5])
+    normal = np.array([0.0, 0.0, 2.0])          # not a unit vector on purpose
+    origin, offset = plane_origin(centre, normal, offset=0.02)
+    assert np.allclose(origin, [1.0, -0.5, 7.52]) and offset == 0.02
+    # a point names the plane directly, and reports the offset it works out to
+    origin, offset = plane_origin(centre, normal, point=[1.04, -0.49, 7.45])
+    assert np.allclose(origin, [1.04, -0.49, 7.45])
+    assert np.isclose(offset, -0.05)
+    # only the component along the normal counts towards the offset
+    _origin, offset = plane_origin(centre, normal, point=[9.0, 9.0, 7.5])
+    assert np.isclose(offset, 0.0)
+    # the two are inverses: feed the offset back and get the same plane
+    point = [1.04, -0.49, 7.45]
+    _o, off = plane_origin(centre, normal, point=point)
+    back, _ = plane_origin(centre, normal, offset=off)
+    assert np.isclose(np.dot(np.array(point) - back, [0, 0, 1]), 0.0)
+    try:
+        plane_origin(centre, [0, 0, 0], offset=1.0)
+    except ValueError as error:
+        assert "zero" in str(error)
+    else:
+        raise AssertionError("a zero normal should have been refused")

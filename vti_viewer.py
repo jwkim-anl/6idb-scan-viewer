@@ -33,6 +33,7 @@ from volume_style import BACKGROUNDS
 from volume_style import COLORMAPS
 from volume_style import theme
 from volume_style import spin as _spin
+from volume_style import PlanePlacement
 
 INTENSITY = "intensity"
 # Used until a file is open and the grid's own cell size can be read.
@@ -271,12 +272,9 @@ class VtiWindow(QtWidgets.QMainWindow):
 
         # Five decimals, not four: the step below defaults to the grid's cell
         # size, and at four decimals a cell of 6.7e-04 could not be typed.
-        self.slice_offset_spin = _spin(0.0, -1e6, 1e6, 5, DEFAULT_OFFSET_STEP)
-        self.slice_offset_spin.setToolTip(
-            "How far the plane sits from the centre of the map, along its normal."
-        )
-        self.slice_offset_spin.valueChanged.connect(self._slice_moved)
-        form.addRow("Offset along normal", self.slice_offset_spin)
+        self.slice_placement = PlanePlacement(DEFAULT_OFFSET_STEP)
+        self.slice_placement.changed.connect(self._slice_moved)
+        form.addRow(self.slice_placement)
         self.slice_step_spin = _spin(DEFAULT_OFFSET_STEP, 1e-6, 1e4, 5, 1e-4)
         self.slice_step_spin.setToolTip(
             "How far one click of the arrows, or one arrow key, moves the plane.\n"
@@ -481,7 +479,7 @@ class VtiWindow(QtWidgets.QMainWindow):
                 cell = float(np.min(np.abs(np.asarray(grid.spacing, float))))
                 if np.isfinite(cell) and cell > 0:
                     self.slice_step_spin.setValue(cell)
-                    self.slice_offset_spin.setSingleStep(cell)
+                    self.slice_placement.set_step(cell)
                 if self.int_auto_check.isChecked():
                     self.int_min_spin.setValue(self.span[0])
                     self.int_max_spin.setValue(self.span[1])
@@ -558,7 +556,7 @@ class VtiWindow(QtWidgets.QMainWindow):
 
     def _offset_step_changed(self, value):
         """Retune the offset box's arrows; the plane itself does not move."""
-        self.slice_offset_spin.setSingleStep(float(value))
+        self.slice_placement.set_step(float(value))
 
     def _slice_controls_enabled(self):
         shown = self.show_slice_check.isChecked()
@@ -568,7 +566,7 @@ class VtiWindow(QtWidgets.QMainWindow):
             widget.setEnabled(live)
         for button in self._slice_preset_buttons:
             button.setEnabled(live)
-        self.slice_offset_spin.setEnabled(live)
+        self.slice_placement.setEnabled(live)
         self.slice_step_spin.setEnabled(live)
         self.slice_avg_spin.setEnabled(shown)
         self.slice_lock_check.setEnabled(shown)
@@ -605,7 +603,7 @@ class VtiWindow(QtWidgets.QMainWindow):
         self._slice_moved()
 
     def _centre_slice(self):
-        self.slice_offset_spin.setValue(0.0)
+        self.slice_placement.set_offset(0.0)
 
     # -- geometry ----------------------------------------------------------
 
@@ -647,12 +645,16 @@ class VtiWindow(QtWidgets.QMainWindow):
             normal = np.array([0.0, 0.0, 1.0])
             length = 1.0
         normal = normal / length
-        return normal, self._centre() + normal * self.slice_offset_spin.value()
+        origin, _offset = self.slice_placement.origin_and_offset(
+            self._centre(), normal)
+        return normal, origin
 
     def _show_unit_normal(self):
         normal, _ = self.slice_plane()
         self.slice_unit_label.setText("unit:  %.3f, %.3f, %.3f" % tuple(normal))
 
+        # Keeps the offset and the point agreeing, and both on screen.
+        self.slice_placement.refresh(self._centre(), self.slice_plane()[0])
     def visible_grid(self):
         """The grid to draw: cropped to the HKL box, or the whole thing.
 
@@ -724,7 +726,7 @@ class VtiWindow(QtWidgets.QMainWindow):
         try:
             for spin, value in zip(self.slice_normal_spins, normal):
                 spin.setValue(float(value))
-            self.slice_offset_spin.setValue(offset)
+            self.slice_placement.set_offset(offset)
         finally:
             self._updating = False
         self._show_unit_normal()

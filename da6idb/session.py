@@ -600,8 +600,15 @@ class HklMap:
         array.attrs["path"] = str(path)
         return array
 
-    def slice(self, normal=(0, 0, 1), offset=0.0, layers=1, **kwargs):
+    def slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1,
+              **kwargs):
         """A plane through the grid, as a labelled 2D array.
+
+        The plane is placed either by *offset* -- how far along the normal
+        from the centre of the map -- or by *point*, an H, K, L the plane
+        must pass through, which is usually what you actually know. The
+        result records both, and with a *point* the plane's own coordinates
+        are measured from it.
 
         Cuts the lattice :meth:`grid` last built unless told otherwise, so
         asking for a coarse grid and then slicing it does not quietly produce
@@ -615,7 +622,8 @@ class HklMap:
         _grid.make_drawable(cube)
         normal = np.asarray(normal, dtype=float)
         normal = normal / np.linalg.norm(normal)
-        origin = np.asarray(cube.center, dtype=float) + normal * offset
+        origin, offset = _slice.plane_origin(
+            cube.center, normal, offset=offset, point=point)
         image, us, vs, u, v, corner = _slice.sample_plane(
             cube, normal, origin, layers=layers)
 
@@ -631,6 +639,7 @@ class HklMap:
                             coords={y_name: y_values, x_name: x_values},
                             name="intensity",
                             attrs={"normal": list(normal), "offset": float(offset),
+                                   "point": [float(c) for c in origin],
                                    "layers": int(layers)})
 
     def __repr__(self):
