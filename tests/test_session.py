@@ -372,3 +372,31 @@ def test_slice_can_be_placed_by_a_point_on_it():
     tilted = hkl.slice(normal=(1, 1, 2), point=point, **coarse)
     assert np.allclose(tilted.attrs["point"], point)
     assert all(name.startswith("along [") for name in tilted.dims)
+
+
+def test_slice_leaves_unmeasured_cells_blank():
+    """A slice has to scale its colours on measured data, not on fill.
+
+    ``grid`` already returns NaN where the scan never reached; a slice that
+    turned those into zeros would paint most of the plane the bottom colour
+    and drag every automatic colour range down with it.
+    """
+    if not have_example():
+        return
+    hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+    cube = hkl.grid(oversample=6.0)
+    assert np.isnan(np.asarray(cube)).any()          # the lattice has holes
+
+    sl = hkl.slice(normal=(0, 0, 1), offset=0.0)
+    values = np.asarray(sl, dtype=float)
+    empty = np.isnan(values)
+    assert empty.any(), "nothing came back unmeasured"
+    # whatever is left must be real data, not a floor of zeros
+    assert (values[~empty] == 0).mean() < 0.02
+    check("session/slice_blank_fraction", round(float(empty.mean()), 3))
+
+    # and a slab average must not let one NaN layer swallow the rest
+    thick = np.asarray(hkl.slice(normal=(0, 0, 1), offset=0.0, layers=5),
+                       dtype=float)
+    assert np.isnan(thick).mean() <= empty.mean() + 0.01
+    assert np.nanmax(thick) > 0

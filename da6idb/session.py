@@ -604,6 +604,10 @@ class HklMap:
               **kwargs):
         """A plane through the grid, as a labelled 2D array.
 
+        Cells the scan never reached come back as NaN, as they do from
+        :meth:`grid`, so they are left blank by ``.plot()`` and kept out of
+        its colour scaling rather than painted the bottom colour.
+
         The plane is placed either by *offset* -- how far along the normal
         from the centre of the map -- or by *point*, an H, K, L the plane
         must pass through, which is usually what you actually know. The
@@ -619,7 +623,6 @@ class HklMap:
         settings = {**self._lattice, **kwargs}
         cube, _path, _made = _grid.ensure_grid(
             self.path, self.master, geometry=self.geometry, **settings)
-        _grid.make_drawable(cube)
         normal = np.asarray(normal, dtype=float)
         normal = normal / np.linalg.norm(normal)
         origin, offset = _slice.plane_origin(
