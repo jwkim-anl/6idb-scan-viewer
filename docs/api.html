@@ -1,0 +1,819 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>da6idb API</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1b1b1a; --dim: #6a6a66;
+    --line: #e3e2de; --accent: #8a5a2b; --code-bg: #f3f2ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17181a; --panel: #1e1f22; --ink: #e6e5e2; --dim: #9b9a95;
+      --line: #2e2f33; --accent: #d79b63; --code-bg: #26272b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17181a; --panel: #1e1f22; --ink: #e6e5e2; --dim: #9b9a95;
+    --line: #2e2f33; --accent: #d79b63; --code-bg: #26272b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  code, pre, .sig {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    padding: 26px 16px 20px; border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 25px; letter-spacing: -0.01em; }
+  h1 code { font-size: 25px; background: none; padding: 0; color: var(--accent); }
+  .meta { color: var(--dim); font-size: 13.5px; margin: 0; }
+  #find {
+    margin-top: 16px; width: 100%; padding: 9px 12px; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: var(--bg); color: var(--ink);
+  }
+  #find:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .layout { display: flex; gap: 30px; align-items: flex-start;
+             max-width: 1180px; margin: 0 auto; padding: 0 16px 70px; }
+  nav {
+    width: 248px; flex: none; position: sticky; top: 16px;
+    max-height: calc(100vh - 32px); overflow-y: auto; padding-top: 22px;
+    font-size: 13.5px;
+  }
+  nav ul { list-style: none; margin: 0; padding: 0; }
+  nav li { margin-bottom: 12px; }
+  nav a { text-decoration: none; color: var(--ink); display: block; }
+  nav a.m { font-weight: 600; color: var(--accent);
+             font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  nav .sub { display: flex; flex-direction: column; margin: 3px 0 0 9px;
+              border-left: 1px solid var(--line); }
+  nav a.n { color: var(--dim); padding: 1px 0 1px 9px; }
+  nav a.n:hover, nav a.m:hover { color: var(--accent); }
+  main { flex: 1; min-width: 0; padding-top: 22px; }
+  section.module { margin-bottom: 40px; }
+  h2 { font-size: 19px; margin: 0 0 4px;
+        font-family: ui-monospace, Menlo, monospace; }
+  h2 a { color: var(--accent); text-decoration: none; }
+  .lead { margin: 0 0 16px; color: var(--dim); }
+  .entry {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 9px; padding: 13px 16px; margin-bottom: 11px;
+  }
+  .entry h3 { margin: 0 0 7px; font-size: 15px; font-weight: 600; }
+  .entry h3 a { color: var(--ink); text-decoration: none;
+                 font-family: ui-monospace, Menlo, monospace; }
+  .entry h3 a:hover { color: var(--accent); }
+  .kind { color: var(--accent); font-weight: 500; font-size: 12px;
+           margin-right: 7px; text-transform: uppercase; letter-spacing: .05em; }
+  .sig { color: var(--dim); font-weight: 400; font-size: 13px;
+          word-break: break-word; }
+  .doc p { margin: 0 0 9px; }
+  .doc p:last-child { margin-bottom: 0; }
+  .doc .none { color: var(--dim); font-style: italic; }
+  pre { background: var(--code-bg); padding: 9px 11px; border-radius: 6px;
+         overflow-x: auto; font-size: 13px; margin: 0 0 9px; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px;
+          font-size: 12.8px; }
+  .props { margin: 9px 0; font-size: 13.5px; }
+  .props span { color: var(--dim); margin-right: 5px; }
+  .method { border-top: 1px solid var(--line); margin-top: 11px;
+             padding-top: 11px; }
+  .method h4 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+  .method h4 a { color: var(--ink); text-decoration: none;
+                  font-family: ui-monospace, Menlo, monospace; }
+  .method h4 a:hover { color: var(--accent); }
+  .hidden { display: none; }
+  #empty { color: var(--dim); padding: 24px 2px; }
+  @media (max-width: 820px) {
+    .layout { flex-direction: column; gap: 0; }
+    nav { position: static; width: 100%; max-height: none; }
+  }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1><code>da6idb</code> — every public function</h1>
+  <p class="meta">
+    Version 0.1.0.dev0 · 116 callables, 9 classes across
+    12 modules · generated from the source on 2026-10-06 by
+    <code>python docs/make_api_html.py</code>
+  </p>
+  <p class="meta">
+    Nothing here needs Qt. The reading modules need only numpy, h5py and
+    scipy; <code>da6idb.session</code> adds pandas and xarray;
+    <code>da6idb.hkl</code> adds xrayutilities and pyvista.
+  </p>
+  <input id="find" type="search" placeholder="Filter by name or description…"
+         autocomplete="off" spellcheck="false">
+</div></header>
+<div class="layout">
+  <nav><ul>
+<li><a class="m" href="#da6idb-batch">da6idb.batch</a><div class="sub"><a class="n" href="#da6idb-batch-expand-scans">expand_scans</a><a class="n" href="#da6idb-batch-parse-scans">parse_scans</a><a class="n" href="#da6idb-batch-find-scans">find_scans</a><a class="n" href="#da6idb-batch-grid-scans">grid_scans</a></div></li>
+<li><a class="m" href="#da6idb-export">da6idb.export</a><div class="sub"><a class="n" href="#da6idb-export-slug">slug</a><a class="n" href="#da6idb-export-suffix-for">suffix_for</a><a class="n" href="#da6idb-export-write-matrix">write_matrix</a><a class="n" href="#da6idb-export-write-columns">write_columns</a><a class="n" href="#da6idb-export-write-dataarray">write_dataarray</a></div></li>
+<li><a class="m" href="#da6idb-files">da6idb.files</a><div class="sub"><a class="n" href="#da6idb-files-detector-files-from-metadata">detector_files_from_metadata</a><a class="n" href="#da6idb-files-image-path-for-master">image_path_for_master</a><a class="n" href="#da6idb-files-master-path-for-image">master_path_for_image</a><a class="n" href="#da6idb-files-read-master-rois">read_master_rois</a><a class="n" href="#da6idb-files-is-image-file">is_image_file</a><a class="n" href="#da6idb-files-resolve-image-file">resolve_image_file</a><a class="n" href="#da6idb-files-scan-number">scan_number</a><a class="n" href="#da6idb-files-file-prefix">file_prefix</a><a class="n" href="#da6idb-files-list-hdf-files">list_hdf_files</a></div></li>
+<li><a class="m" href="#da6idb-hkl-convert">da6idb.hkl.convert</a><div class="sub"><a class="n" href="#da6idb-hkl-convert-build-converter">build_converter</a><a class="n" href="#da6idb-hkl-convert-frame-hkl">frame_hkl</a><a class="n" href="#da6idb-hkl-convert-HklCloud">HklCloud</a><a class="n" href="#da6idb-hkl-convert-convert">convert</a></div></li>
+<li><a class="m" href="#da6idb-hkl-detector">da6idb.hkl.detector</a><div class="sub"><a class="n" href="#da6idb-hkl-detector-circle-delta">circle_delta</a><a class="n" href="#da6idb-hkl-detector-detector-basis">detector_basis</a><a class="n" href="#da6idb-hkl-detector-two-theta-maps">two_theta_maps</a><a class="n" href="#da6idb-hkl-detector-two-theta-at">two_theta_at</a></div></li>
+<li><a class="m" href="#da6idb-hkl-geometry">da6idb.hkl.geometry</a><div class="sub"><a class="n" href="#da6idb-hkl-geometry-HklGeometry">HklGeometry</a><a class="n" href="#da6idb-hkl-geometry-setup-path">setup_path</a><a class="n" href="#da6idb-hkl-geometry-read-setup">read_setup</a><a class="n" href="#da6idb-hkl-geometry-apply-setup">apply_setup</a><a class="n" href="#da6idb-hkl-geometry-write-setup">write_setup</a><a class="n" href="#da6idb-hkl-geometry-setup-differences">setup_differences</a><a class="n" href="#da6idb-hkl-geometry-read-transmission">read_transmission</a><a class="n" href="#da6idb-hkl-geometry-read-geometry">read_geometry</a></div></li>
+<li><a class="m" href="#da6idb-hkl-grid">da6idb.hkl.grid</a><div class="sub"><a class="n" href="#da6idb-hkl-grid-GridCancelled">GridCancelled</a><a class="n" href="#da6idb-hkl-grid-geometry-fingerprint">geometry_fingerprint</a><a class="n" href="#da6idb-hkl-grid-sampling-cell">sampling_cell</a><a class="n" href="#da6idb-hkl-grid-sampling-footprint">sampling_footprint</a><a class="n" href="#da6idb-hkl-grid-natural-step">natural_step</a><a class="n" href="#da6idb-hkl-grid-measured-range">measured_range</a><a class="n" href="#da6idb-hkl-grid-default-output">default_output</a><a class="n" href="#da6idb-hkl-grid-matches-range">matches_range</a><a class="n" href="#da6idb-hkl-grid-grid-to-vti">grid_to_vti</a><a class="n" href="#da6idb-hkl-grid-ensure-grid">ensure_grid</a><a class="n" href="#da6idb-hkl-grid-make-drawable">make_drawable</a><a class="n" href="#da6idb-hkl-grid-to-xarray">to_xarray</a><a class="n" href="#da6idb-hkl-grid-load-vti">load_vti</a><a class="n" href="#da6idb-hkl-grid-main">main</a></div></li>
+<li><a class="m" href="#da6idb-hkl-slice">da6idb.hkl.slice</a><div class="sub"><a class="n" href="#da6idb-hkl-slice-plane-basis">plane_basis</a><a class="n" href="#da6idb-hkl-slice-plane-origin">plane_origin</a><a class="n" href="#da6idb-hkl-slice-slab-offsets">slab_offsets</a><a class="n" href="#da6idb-hkl-slice-sample-volume">sample_volume</a><a class="n" href="#da6idb-hkl-slice-average-along-normal">average_along_normal</a><a class="n" href="#da6idb-hkl-slice-line-cut">line_cut</a><a class="n" href="#da6idb-hkl-slice-sample-plane">sample_plane</a></div></li>
+<li><a class="m" href="#da6idb-images">da6idb.images</a><div class="sub"><a class="n" href="#da6idb-images-nearest-index">nearest_index</a><a class="n" href="#da6idb-images-evenly-spaced-index">evenly_spaced_index</a><a class="n" href="#da6idb-images-read-scan-channels">read_scan_channels</a><a class="n" href="#da6idb-images-ImageData">ImageData</a></div></li>
+<li><a class="m" href="#da6idb-rois">da6idb.rois</a><div class="sub"><a class="n" href="#da6idb-rois-Rect">Rect</a><a class="n" href="#da6idb-rois-reduce-frame">reduce_frame</a><a class="n" href="#da6idb-rois-empty-series">empty_series</a><a class="n" href="#da6idb-rois-sub-frames">sub_frames</a><a class="n" href="#da6idb-rois-series">series</a></div></li>
+<li><a class="m" href="#da6idb-scan">da6idb.scan</a><div class="sub"><a class="n" href="#da6idb-scan-stream-fields">stream_fields</a><a class="n" href="#da6idb-scan-read-primary">read_primary</a><a class="n" href="#da6idb-scan-read-baseline">read_baseline</a><a class="n" href="#da6idb-scan-read-scan-info">read_scan_info</a><a class="n" href="#da6idb-scan-describe-fields">describe_fields</a><a class="n" href="#da6idb-scan-default-x-field">default_x_field</a><a class="n" href="#da6idb-scan-scan-x-field">scan_x_field</a><a class="n" href="#da6idb-scan-scan-hkl">scan_hkl</a><a class="n" href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><a class="n" href="#da6idb-scan-read-grid">read_grid</a><a class="n" href="#da6idb-scan-axis-edges">axis_edges</a><a class="n" href="#da6idb-scan-curve-stats">curve_stats</a><a class="n" href="#da6idb-scan-grid-stats">grid_stats</a></div></li>
+<li><a class="m" href="#da6idb-session">da6idb.session</a><div class="sub"><a class="n" href="#da6idb-session-open-folder">open_folder</a><a class="n" href="#da6idb-session-open-scan">open_scan</a><a class="n" href="#da6idb-session-ScanSet">ScanSet</a><a class="n" href="#da6idb-session-Scan">Scan</a><a class="n" href="#da6idb-session-Images">Images</a><a class="n" href="#da6idb-session-HklMap">HklMap</a></div></li>
+  </ul></nav>
+  <main>
+
+    <section class="module" id="da6idb-batch">
+      <h2><a href="#da6idb-batch">da6idb.batch</a></h2>
+      <p class="lead">Gridding a run of scans onto one common lattice.</p>
+      
+      <article class="entry" id="da6idb-batch-expand-scans" data-name="expand_scans the scan numbers from *start* to *end* inclusive, every *step*.">
+        <h3><a href="#da6idb-batch-expand-scans">expand_scans</a><span class="sig">(start, end, step=1)</span></h3>
+        <div class="doc"><p>The scan numbers from <em>start</em> to <em>end</em> inclusive, every <em>step</em>.</p>
+<p>Given 152, 160, 2 this is [152, 154, 156, 158, 160]. The ends may be the other way round, and a step of zero is taken to mean one.</p></div>
+      </article>
+      <article class="entry" id="da6idb-batch-parse-scans" data-name="parse_scans scan numbers from what someone typed: &quot;152, 154 157-160&quot;.">
+        <h3><a href="#da6idb-batch-parse-scans">parse_scans</a><span class="sig">(text)</span></h3>
+        <div class="doc"><p>Scan numbers from what someone typed: &quot;152, 154 157-160&quot;.</p></div>
+      </article>
+      <article class="entry" id="da6idb-batch-find-scans" data-name="find_scans ``{scan number: image path}`` for the pva files in *folder*.">
+        <h3><a href="#da6idb-batch-find-scans">find_scans</a><span class="sig">(folder)</span></h3>
+        <div class="doc"><p><code>{scan number: image path}</code> for the pva files in <em>folder</em>.</p></div>
+      </article>
+      <article class="entry" id="da6idb-batch-grid-scans" data-name="grid_scans grid several scans onto one lattice. returns ``[(number, path, note)]``.">
+        <h3><a href="#da6idb-batch-grid-scans">grid_scans</a><span class="sig">(folder, numbers, hkl_range=None, oversample=1.0, output=None, step=None, reuse=True, normalize_transmission=True, on_start=None, on_geometry=None, on_done=None, progress=None)</span></h3>
+        <div class="doc"><p>Grid several scans onto one lattice. Returns <code>[(number, path, note)]</code>.</p>
+<p><code>path</code> is None for a scan that could not be done, and <code>note</code> says why. The cell size comes from the first scan that reads successfully unless <em>step</em> is given outright. With <em>normalize_transmission</em> each scan&#x27;s frames are divided by its attenuator transmission where that varies, which is decided per scan -- a series can mix scans that moved their filter with scans that did not.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-export">
+      <h2><a href="#da6idb-export">da6idb.export</a></h2>
+      <p class="lead">Writing a slice or a cut out to a file.</p>
+      
+      <article class="entry" id="da6idb-export-slug" data-name="slug a label that is safe in a file name or an hdf5 key.">
+        <h3><a href="#da6idb-export-slug">slug</a><span class="sig">(text)</span></h3>
+        <div class="doc"><p>A label that is safe in a file name or an HDF5 key.</p></div>
+      </article>
+      <article class="entry" id="da6idb-export-suffix-for" data-name="suffix_for which writer to use: the extension if it says, else the chosen filter.">
+        <h3><a href="#da6idb-export-suffix-for">suffix_for</a><span class="sig">(path, selected=&#x27;&#x27;)</span></h3>
+        <div class="doc"><p>Which writer to use: the extension if it says, else the chosen filter.</p></div>
+      </article>
+      <article class="entry" id="da6idb-export-write-matrix" data-name="write_matrix a 2d array with its two axes. unmeasured cells are written as nan.">
+        <h3><a href="#da6idb-export-write-matrix">write_matrix</a><span class="sig">(path, image, x, y, x_label=&#x27;x&#x27;, y_label=&#x27;y&#x27;, description=(), suffix=None)</span></h3>
+        <div class="doc"><p>A 2D array with its two axes. Unmeasured cells are written as NaN.</p></div>
+      </article>
+      <article class="entry" id="da6idb-export-write-columns" data-name="write_columns cuts as columns. returns the names written.">
+        <h3><a href="#da6idb-export-write-columns">write_columns</a><span class="sig">(path, datasets, description=(), suffix=None, note_width=None)</span></h3>
+        <div class="doc"><p>Cuts as columns. Returns the names written.</p>
+<p><em>datasets</em> is <code>[(name, note, {column: values}), ...]</code>. Text and CSV take one file per cut, suffixing the name when there is more than one; the archive formats hold them all.</p></div>
+      </article>
+      <article class="entry" id="da6idb-export-write-dataarray" data-name="write_dataarray write a 2d :class:`xarray.dataarray`, taking its axes from the coords.">
+        <h3><a href="#da6idb-export-write-dataarray">write_dataarray</a><span class="sig">(array, path, description=())</span></h3>
+        <div class="doc"><p>Write a 2D <code>DataArray</code>, taking its axes from the coords.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-files">
+      <h2><a href="#da6idb-files">da6idb.files</a></h2>
+      <p class="lead">Finding the files a scan is made of, and pairing them up.</p>
+      
+      <article class="entry" id="da6idb-files-detector-files-from-metadata" data-name="detector_files_from_metadata the detector file paths the master records, in the order it lists them.">
+        <h3><a href="#da6idb-files-detector-files-from-metadata">detector_files_from_metadata</a><span class="sig">(master)</span></h3>
+        <div class="doc"><p>The detector file paths the master records, in the order it lists them.</p>
+<p>The value reads <code>lambda250k: /some/where/scan_00001.h5</code>, one detector per line; older masters write an empty <code>{}</code> there, which yields nothing.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-image-path-for-master" data-name="image_path_for_master the image file belonging to *master*, or ``none`` if none is next to it.">
+        <h3><a href="#da6idb-files-image-path-for-master">image_path_for_master</a><span class="sig">(master)</span></h3>
+        <div class="doc"><p>The image file belonging to <em>master</em>, or <code>None</code> if none is next to it.</p>
+<p>Tried in turn: the detector file the master names -- where it points, then relative to the experiment root, then by name beside the master -- the <code>file_name</code> in the older <code>pva_streaming</code> block, and last the <code>&lt;master stem minus &quot;_master&quot;&gt;</code> -&gt; <code>pva_&lt;stem&gt;.h5</code> convention. Newer masters name a file that follows no convention at all (<code>test_00001.h5</code> beside <code>test_00001_master.hdf</code>), which only the recorded name can find.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-master-path-for-image" data-name="master_path_for_image the master file this image file belongs to.">
+        <h3><a href="#da6idb-files-master-path-for-image">master_path_for_image</a><span class="sig">(image)</span></h3>
+        <div class="doc"><p>The master file this image file belongs to.</p>
+<p>Beside the image first. Failing that, a short walk up the tree, trying each ancestor and each ancestor&#x27;s copy of the image&#x27;s own directory name -- which is where the master sits when the detector writes into a parallel tree. The name is specific enough (<code>&lt;scan&gt;_master.hdf</code>) that the search stays safe; callers that already know the pair should pass it rather than rely on this.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-read-master-rois" data-name="read_master_rois the detector&#x27;s rois as recorded in the master&#x27;s baseline.">
+        <h3><a href="#da6idb-files-read-master-rois">read_master_rois</a><span class="sig">(master)</span></h3>
+        <div class="doc"><p>The detector&#x27;s ROIs as recorded in the master&#x27;s baseline.</p>
+<p>Newer image files carry no <code>entry/data/rois</code> of their own, so this is the only record of where the detector&#x27;s ROIs were. The numbers are the same ones the older writer put in the image file -- a corner and a size in pixels -- so they come back in the same shape.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-is-image-file" data-name="is_image_file whether *path* is itself an image file (i.e. it holds an image stack).">
+        <h3><a href="#da6idb-files-is-image-file">is_image_file</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>Whether <em>path</em> is itself an image file (i.e. it holds an image stack).</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-resolve-image-file" data-name="resolve_image_file the image file to open for *path*, which may be a master or an image file.">
+        <h3><a href="#da6idb-files-resolve-image-file">resolve_image_file</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>The image file to open for <em>path</em>, which may be a master or an image file.</p>
+<p>Selecting a <code>pva*.h5</code> directly in the file list is the obvious way to ask for it, so that opens itself rather than hunting for a partner.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-scan-number" data-name="scan_number the scan number in a file name: ``00008`` from ``tise2_2_00008_master.hdf``.">
+        <h3><a href="#da6idb-files-scan-number">scan_number</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>The scan number in a file name: <code>00008</code> from <code>tise2_2_00008_master.hdf</code>.</p>
+<p>The last run of digits wins, so the prefix&#x27;s own digits (<code>tise2_2</code>) are ignored and the sibling <code>pva_tise2_2_00008.h5</code> reports the same number.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-file-prefix" data-name="file_prefix the part of a file name in front of the scan number: ``tise2_2``.">
+        <h3><a href="#da6idb-files-file-prefix">file_prefix</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>The part of a file name in front of the scan number: <code>tise2_2</code>.</p>
+<p>Everything from the scan number onwards is dropped, so the files of one series all reduce to the same string.</p></div>
+      </article>
+      <article class="entry" id="da6idb-files-list-hdf-files" data-name="list_hdf_files return the hdf5 files directly inside *directory*, sorted by name.">
+        <h3><a href="#da6idb-files-list-hdf-files">list_hdf_files</a><span class="sig">(directory)</span></h3>
+        <div class="doc"><p>Return the HDF5 files directly inside <em>directory</em>, sorted by name.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-hkl-convert">
+      <h2><a href="#da6idb-hkl-convert">da6idb.hkl.convert</a></h2>
+      <p class="lead">Turning detector frames into a cloud of points in reciprocal space.</p>
+      
+      <article class="entry" id="da6idb-hkl-convert-build-converter" data-name="build_converter the xrayutilities area-detector converter for this geometry.">
+        <h3><a href="#da6idb-hkl-convert-build-converter">build_converter</a><span class="sig">(geometry)</span></h3>
+        <div class="doc"><p>The xrayutilities area-detector converter for this geometry.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-convert-frame-hkl" data-name="frame_hkl (h, k, l) for every pixel of one frame, each shaped like the detector.">
+        <h3><a href="#da6idb-hkl-convert-frame-hkl">frame_hkl</a><span class="sig">(geometry, hxrd, frame)</span></h3>
+        <div class="doc"><p>(H, K, L) for every pixel of one frame, each shaped like the detector.</p></div>
+      </article>
+      <article class="entry cls" id="da6idb-hkl-convert-HklCloud" data-name="HklCloud the reduced point cloud handed to the plotter. bounds ``((h0, h1), (k0, k1), (l0, l1))`` of the points kept.">
+        <h3><span class="kind">class</span><a href="#da6idb-hkl-convert-HklCloud">HklCloud</a></h3>
+        <div class="doc"><p>The reduced point cloud handed to the plotter.</p></div>
+        
+        <div class="method" id="da6idb-hkl-convert-HklCloud-bounds">
+          <h4><a href="#da6idb-hkl-convert-HklCloud-bounds">.bounds</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p><code>((h0, h1), (k0, k1), (l0, l1))</code> of the points kept.</p></div>
+        </div>
+      </article>
+      <article class="entry" id="da6idb-hkl-convert-convert" data-name="convert map the selected frames into (h, k, l), keeping the interesting pixels.">
+        <h3><a href="#da6idb-hkl-convert-convert">convert</a><span class="sig">(geometry, first=0, last=None, step=1, threshold=0.0, max_points=2000000, progress=None)</span></h3>
+        <div class="doc"><p>Map the selected frames into (H, K, L), keeping the interesting pixels.</p>
+<p>Every pixel of every frame is a point, which for a long scan is far more than can be held or drawn -- 601 frames of 516x516 is 160 million. So each frame is reduced as it is converted: pixels at or below <em>threshold</em> are dropped, and if what survives still exceeds <em>max_points</em> the brightest are kept. Reducing per frame keeps the full set from ever being in memory.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-hkl-detector">
+      <h2><a href="#da6idb-hkl-detector">da6idb.hkl.detector</a></h2>
+      <p class="lead">The scattering angle a detector pixel sees, from xrayutilities&#x27; geometry.</p>
+      
+      <article class="entry" id="da6idb-hkl-detector-circle-delta" data-name="circle_delta what the delta circle read on each frame.">
+        <h3><a href="#da6idb-hkl-detector-circle-delta">circle_delta</a><span class="sig">(geometry)</span></h3>
+        <div class="doc"><p>What the delta circle read on each frame.</p>
+<p>The angle of the centre pixel, which is what the motor is set to -- not the angle of whatever the detector was actually looking at.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-detector-detector-basis" data-name="detector_basis pixel (0, 0) and one step along each pixel axis, in lab coordinates.">
+        <h3><a href="#da6idb-hkl-detector-detector-basis">detector_basis</a><span class="sig">(hxrd, detector_angles)</span></h3>
+        <div class="doc"><p>Pixel (0, 0) and one step along each pixel axis, in lab coordinates.</p>
+<p><code>getDetectorPos</code> returns the direction to each pixel with the arm rotations applied. That position is affine in the pixel indices, so these three vectors give any pixel, whole or fractional, exactly.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-detector-two-theta-maps" data-name="two_theta_maps scattering angles at pixel coordinates *x*, *y*, for every frame.">
+        <h3><a href="#da6idb-hkl-detector-two-theta-maps">two_theta_maps</a><span class="sig">(geometry, x, y, hxrd=None)</span></h3>
+        <div class="doc"><p>Scattering angles at pixel coordinates <em>x</em>, <em>y</em>, for every frame.</p>
+<p>Returns <code>(maps, index)</code>: one array shaped like <em>x</em> per distinct detector position, and which of them each frame uses. Frames that leave the detector where it was share a map, so a scan that never moves it evaluates once however many frames it has and however large the region.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-detector-two-theta-at" data-name="two_theta_at the scattering angle at pixel ``(x, y)`` on each frame, in degrees.">
+        <h3><a href="#da6idb-hkl-detector-two-theta-at">two_theta_at</a><span class="sig">(geometry, x, y, hxrd=None)</span></h3>
+        <div class="doc"><p>The scattering angle at pixel <code>(x, y)</code> on each frame, in degrees.</p>
+<p><em>x</em> and <em>y</em> are detector pixels indexed as the frame is stored, and may be fractional -- a centre of mass usually is. Give one position, or one per frame.</p>
+<p>The detector basis is rebuilt only when the circles move, so a scan that leaves the detector still costs one call however many frames it has.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-hkl-geometry">
+      <h2><a href="#da6idb-hkl-geometry">da6idb.hkl.geometry</a></h2>
+      <p class="lead">The instrument description that turns a detector pixel into H, K, L.</p>
+      
+      <article class="entry cls" id="da6idb-hkl-geometry-HklGeometry" data-name="HklGeometry everything the conversion needs, and where each part came from. transmission_varies frame_scale energy_ev pixel_widths whether the attenuator moved during the scan. what to multiply a frame&#x27;s counts by to undo the attenuator. the beam energy in ev, which is what xrayutilities wants. one pixel&#x27;s size, from the detector&#x27;s own size and frame shape.">
+        <h3><span class="kind">class</span><a href="#da6idb-hkl-geometry-HklGeometry">HklGeometry</a></h3>
+        <div class="doc"><p>Everything the conversion needs, and where each part came from.</p></div>
+        
+        <div class="method" id="da6idb-hkl-geometry-HklGeometry-transmission-varies">
+          <h4><a href="#da6idb-hkl-geometry-HklGeometry-transmission-varies">.transmission_varies</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>Whether the attenuator moved during the scan.</p></div>
+        </div>
+        <div class="method" id="da6idb-hkl-geometry-HklGeometry-frame-scale">
+          <h4><a href="#da6idb-hkl-geometry-HklGeometry-frame-scale">.frame_scale</a><span class="sig">(self, frame)</span></h4>
+          <div class="doc"><p>What to multiply a frame&#x27;s counts by to undo the attenuator.</p>
+<p>Frames taken through different filters are not on the same scale, so a map built from them has steps in it wherever the attenuator moved. Dividing by the transmission puts every frame on the unattenuated one.</p></div>
+        </div>
+        <div class="method" id="da6idb-hkl-geometry-HklGeometry-energy-ev">
+          <h4><a href="#da6idb-hkl-geometry-HklGeometry-energy-ev">.energy_ev</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The beam energy in eV, which is what xrayutilities wants.</p></div>
+        </div>
+        <div class="method" id="da6idb-hkl-geometry-HklGeometry-pixel-widths">
+          <h4><a href="#da6idb-hkl-geometry-HklGeometry-pixel-widths">.pixel_widths</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>One pixel&#x27;s size, from the detector&#x27;s own size and frame shape.</p></div>
+        </div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-setup-path" data-name="setup_path where the per-folder setup lives.">
+        <h3><a href="#da6idb-hkl-geometry-setup-path">setup_path</a><span class="sig">(folder)</span></h3>
+        <div class="doc"><p>Where the per-folder setup lives.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-read-setup" data-name="read_setup the overrides for *folder*, as ``{field: raw value}``. empty if none.">
+        <h3><a href="#da6idb-hkl-geometry-read-setup">read_setup</a><span class="sig">(folder)</span></h3>
+        <div class="doc"><p>The overrides for <em>folder</em>, as <code>{field: raw value}</code>. Empty if none.</p>
+<p>Raises ValueError if the file is there but unreadable, so a typo is reported rather than silently ignored.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-apply-setup" data-name="apply_setup lay the folder&#x27;s setup over *geometry*. returns the fields it changed.">
+        <h3><a href="#da6idb-hkl-geometry-apply-setup">apply_setup</a><span class="sig">(geometry, folder=None)</span></h3>
+        <div class="doc"><p>Lay the folder&#x27;s setup over <em>geometry</em>. Returns the fields it changed.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-write-setup" data-name="write_setup write *values* as the folder&#x27;s setup, or remove it when empty.">
+        <h3><a href="#da6idb-hkl-geometry-write-setup">write_setup</a><span class="sig">(folder, values)</span></h3>
+        <div class="doc"><p>Write <em>values</em> as the folder&#x27;s setup, or remove it when empty.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-setup-differences" data-name="setup_differences what in *geometry* differs from what its files alone say.">
+        <h3><a href="#da6idb-hkl-geometry-setup-differences">setup_differences</a><span class="sig">(geometry)</span></h3>
+        <div class="doc"><p>What in <em>geometry</em> differs from what its files alone say.</p>
+<p>This is what a Save writes: only the values actually changed, so a setup file does not quietly pin everything else as well.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-read-transmission" data-name="read_transmission attenuator transmission for each frame, or none if nothing records it.">
+        <h3><a href="#da6idb-hkl-geometry-read-transmission">read_transmission</a><span class="sig">(image, master, n_frames, frame_epoch=None)</span></h3>
+        <div class="doc"><p>Attenuator transmission for each frame, or None if nothing records it.</p>
+<p>The image file stores one reading per frame, which is what a frame was actually taken through; the master samples at scan points and misses the transients the free-running detector catches, so it is only a fallback.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-geometry-read-geometry" data-name="read_geometry the conversion parameters for *image*, master first where it has them.">
+        <h3><a href="#da6idb-hkl-geometry-read-geometry">read_geometry</a><span class="sig">(image, master=None, angles_from_master=False, use_setup=True)</span></h3>
+        <div class="doc"><p>The conversion parameters for <em>image</em>, master first where it has them.</p>
+<p>The angles are the exception. The image file records a <code>POSITION</code> with each frame, while the master records one per scan point, on a read-back clock that lags the exposure -- matching those onto the frames shifted every frame of a rocking curve by one whole step, which would move the entire map. So the per-frame values win when they exist; <em>angles_from_master</em> forces the resampled ones, and the window exposes the choice.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-hkl-grid">
+      <h2><a href="#da6idb-hkl-grid">da6idb.hkl.grid</a></h2>
+      <p class="lead">Bin a pva detector stack onto a regular HKL grid and save it as <code>.vti</code>.</p>
+      
+      <article class="entry cls" id="da6idb-hkl-grid-GridCancelled" data-name="GridCancelled raised when a progress callback asked to stop, so nothing is written.">
+        <h3><span class="kind">class</span><a href="#da6idb-hkl-grid-GridCancelled">GridCancelled</a></h3>
+        <div class="doc"><p>Raised when a progress callback asked to stop, so nothing is written.</p></div>
+        
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-geometry-fingerprint" data-name="geometry_fingerprint a short digest of everything that decides where a pixel lands.">
+        <h3><a href="#da6idb-hkl-grid-geometry-fingerprint">geometry_fingerprint</a><span class="sig">(geometry)</span></h3>
+        <div class="doc"><p>A short digest of everything that decides where a pixel lands.</p>
+<p>Stored in the <code>.vti</code> so a cached grid is not reused after the UB, the energy, the detector geometry or the angles have been edited -- the HKL range alone would not notice.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-sampling-cell" data-name="sampling_cell what the sampling supports, in hkl units.">
+        <h3><a href="#da6idb-hkl-grid-sampling-cell">sampling_cell</a><span class="sig">(geometry, frame=None, stride=8)</span></h3>
+        <div class="doc"><p>What the sampling supports, in HKL units.</p>
+<p>Returns <code>(volume_per_sample, frame_gap, in_plane)</code>: the Jacobian volume each sample speaks for, the perpendicular separation between consecutive frames, and the spacing between neighbouring pixels within a frame.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-sampling-footprint" data-name="sampling_footprint how far one sample reaches along each axis -- the fuzzy spread width.">
+        <h3><a href="#da6idb-hkl-grid-sampling-footprint">sampling_footprint</a><span class="sig">(geometry, frame=None, stride=8)</span></h3>
+        <div class="doc"><p>How far one sample reaches along each axis -- the fuzzy spread width.</p>
+<p>The axis-aligned extent of the sampling parallelepiped. This is emphatically not the cell size: the parallelepiped is skewed, so its bounding box is several times its volume.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-natural-step" data-name="natural_step the cell size the sampling supports: a cube holding about one sample.">
+        <h3><a href="#da6idb-hkl-grid-natural-step">natural_step</a><span class="sig">(geometry, oversample=1.0, frame=None)</span></h3>
+        <div class="doc"><p>The cell size the sampling supports: a cube holding about one sample.</p>
+<p><em>oversample</em> scales it -- above 1 for fewer, better-filled cells, below 1 for a finer grid. Because samples are spread over their footprint, a finer cell stays continuous instead of breaking into layers.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-measured-range" data-name="measured_range the hkl box the scan actually reaches, as ``(low, high)`` triples.">
+        <h3><a href="#da6idb-hkl-grid-measured-range">measured_range</a><span class="sig">(geometry, sample_frames=8)</span></h3>
+        <div class="doc"><p>The HKL box the scan actually reaches, as <code>(low, high)</code> triples.</p>
+<p>Useful for choosing a range to give a whole batch before gridding any of it.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-default-output" data-name="default_output where the grid for this file, range and detail level is kept.">
+        <h3><a href="#da6idb-hkl-grid-default-output">default_output</a><span class="sig">(image, hkl_range=None, oversample=1.0)</span></h3>
+        <div class="doc"><p>Where the grid for this file, range and detail level is kept.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-matches-range" data-name="matches_range whether an existing .vti was made for this hkl range.">
+        <h3><a href="#da6idb-hkl-grid-matches-range">matches_range</a><span class="sig">(path, hkl_range, tolerance=1e-06)</span></h3>
+        <div class="doc"><p>Whether an existing .vti was made for this HKL range.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-grid-to-vti" data-name="grid_to_vti bin *image* onto a regular hkl grid and write it as a ``.vti``.">
+        <h3><a href="#da6idb-hkl-grid-grid-to-vti">grid_to_vti</a><span class="sig">(image, master=None, hkl_range=None, output=None, step=None, width=None, oversample=1.0, first=0, last=None, frame_step=1, max_cells=MAX_CELLS, reuse=True, progress=None, geometry=None, normalize_transmission=None)</span></h3>
+        <div class="doc"><p>Bin <em>image</em> onto a regular HKL grid and write it as a <code>.vti</code>.</p>
+<p><code>hkl_range</code> is <code>(h_min, h_max, k_min, k_max, l_min, l_max)</code>; without it the whole measured extent is used. <code>step</code> overrides the automatic cell size and <code>width</code> the fuzzy footprint. Returns the path written -- or the existing one, when <em>reuse</em> is set and a grid for the same range is on disk.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-ensure-grid" data-name="ensure_grid return ``(grid, path, regridded)`` for this file and hkl range.">
+        <h3><a href="#da6idb-hkl-grid-ensure-grid">ensure_grid</a><span class="sig">(image, master=None, hkl_range=None, output=None, reuse=True, geometry=None, oversample=1.0, **kwargs)</span></h3>
+        <div class="doc"><p>Return <code>(grid, path, regridded)</code> for this file and HKL range.</p>
+<p>A cached <code>.vti</code> is reused when the HKL range, the frame range and the geometry it was made for all match what is being asked for now; otherwise the data is gridded and written. Unlike calling <code>grid_to_vti</code> then <code>load_vti</code>, the cached file is read once.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-make-drawable" data-name="make_drawable replace nan in a loaded grid so a volume mapper can draw it.">
+        <h3><a href="#da6idb-hkl-grid-make-drawable">make_drawable</a><span class="sig">(grid, fill=0.0)</span></h3>
+        <div class="doc"><p>Replace NaN in a loaded grid so a volume mapper can draw it.</p>
+<p>NaN marks cells the scan never reached. Handed to a GPU volume mapper it does not come out transparent -- it lights the whole empty region up -- so it has to become a value at the bottom of the colour scale, where the opacity ramp starts at zero.</p>
+<p>Edits the array in place, which on a large grid saves copying a few hundred megabytes, and returns <code>(low, high)</code> of the measured cells read before the NaN goes. The file on disk still holds the NaN.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-to-xarray" data-name="to_xarray a gridded map as an :class:`xarray.dataarray` with real h/k/l coordinates.">
+        <h3><a href="#da6idb-hkl-grid-to-xarray">to_xarray</a><span class="sig">(grid, name=&#x27;intensity&#x27;)</span></h3>
+        <div class="doc"><p>A gridded map as an <code>DataArray</code> with real H/K/L coordinates.</p>
+<p>The same numbers as the <code>.vti</code>, but labelled: <code>cube.sel(L=7.52, method=&quot;nearest&quot;).plot()</code> is then a one-liner, and slicing by coordinate beats remembering which index is which. Unmeasured cells stay NaN, which is what xarray and matplotlib both expect of missing data.</p>
+<p>xarray is imported here rather than at the top so the rest of the package stays usable without it.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-load-vti" data-name="load_vti read a grid written by :func:`grid_to_vti`.">
+        <h3><a href="#da6idb-hkl-grid-load-vti">load_vti</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>Read a grid written by <code>grid_to_vti</code>.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-grid-main" data-name="main the command line: grid one file and say what came out.">
+        <h3><a href="#da6idb-hkl-grid-main">main</a><span class="sig">(argv=None)</span></h3>
+        <div class="doc"><p>The command line: grid one file and say what came out.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-hkl-slice">
+      <h2><a href="#da6idb-hkl-slice">da6idb.hkl.slice</a></h2>
+      <p class="lead">Cutting a plane through a gridded map.</p>
+      
+      <article class="entry" id="da6idb-hkl-slice-plane-basis" data-name="plane_basis two in-plane directions for *normal*, preferring the hkl axes.">
+        <h3><a href="#da6idb-hkl-slice-plane-basis">plane_basis</a><span class="sig">(normal)</span></h3>
+        <div class="doc"><p>Two in-plane directions for <em>normal</em>, preferring the HKL axes.</p>
+<p>When the normal is along an axis the other two axes span the plane exactly, and they are returned in H, K, L order so an L slice is drawn H across and K up. Otherwise any orthonormal pair will do.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-plane-origin" data-name="plane_origin where the cutting plane sits, from an offset or from a point on it.">
+        <h3><a href="#da6idb-hkl-slice-plane-origin">plane_origin</a><span class="sig">(centre, normal, offset=0.0, point=None)</span></h3>
+        <div class="doc"><p>Where the cutting plane sits, from an offset or from a point on it.</p>
+<p>An offset is measured from <em>centre</em> along the unit normal, which is fine for sweeping a plane through a map but awkward when you already know the H, K, L you want to cut through: naming the <em>point</em> places the plane directly, and the plane is then the one through it.</p>
+<p>Returns <code>(origin, offset)</code> either way -- the second being how far the plane ended up from <em>centre</em> -- so a viewer can always show both descriptions of the same plane, whichever was typed.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-slab-offsets" data-name="slab_offsets offsets, in cells, of a slab of *layers* planes centred on zero.">
+        <h3><a href="#da6idb-hkl-slice-slab-offsets">slab_offsets</a><span class="sig">(layers)</span></h3>
+        <div class="doc"><p>Offsets, in cells, of a slab of <em>layers</em> planes centred on zero.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-sample-volume" data-name="sample_volume trilinear values of *grid* at arbitrary hkl points; nan off the grid.">
+        <h3><a href="#da6idb-hkl-slice-sample-volume">sample_volume</a><span class="sig">(grid, points)</span></h3>
+        <div class="doc"><p>Trilinear values of <em>grid</em> at arbitrary HKL points; NaN off the grid.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-average-along-normal" data-name="average_along_normal average *grid* over a slab of *layers* cells centred on *points*.">
+        <h3><a href="#da6idb-hkl-slice-average-along-normal">average_along_normal</a><span class="sig">(grid, points, normal, layers=1, step=None)</span></h3>
+        <div class="doc"><p>Average <em>grid</em> over a slab of <em>layers</em> cells centred on <em>points</em>.</p>
+<p>A plane has no thickness, so a slice of one cell is as noisy as the data gets. Averaging a few cells either side along the normal trades a little resolution across the plane for a great deal less noise in it.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-line-cut" data-name="line_cut intensity along the segment from *start* to *end*, both in hkl.">
+        <h3><a href="#da6idb-hkl-slice-line-cut">line_cut</a><span class="sig">(grid, start, end, samples=None, width=1, normal=None, step=None)</span></h3>
+        <div class="doc"><p>Intensity along the segment from <em>start</em> to <em>end</em>, both in HKL.</p>
+<p>The two points name the cut outright, which is what you want when the line runs between features whose H, K, L you know -- dragging one into place by eye cannot be written down or repeated.</p>
+<p><em>width</em> averages that many parallel lines, spaced <em>step</em> apart and centred on the segment, the way a slab average thickens a plane. Their offset direction is perpendicular to the line and, when <em>normal</em> is given, inside that plane, so widening a cut on a slice stays on the slice instead of wandering out of it.</p>
+<p>Returns <code>(distance, points, values)</code>: distance from <em>start</em> in HKL units, the <code>(n, 3)</code> H, K, L of each sample, and the intensity there, NaN wherever the scan did not reach.</p></div>
+      </article>
+      <article class="entry" id="da6idb-hkl-slice-sample-plane" data-name="sample_plane resample *grid* on the plane. returns (image, us, vs, u, v, origin).">
+        <h3><a href="#da6idb-hkl-slice-sample-plane">sample_plane</a><span class="sig">(grid, normal, origin, pixels=None, layers=1)</span></h3>
+        <div class="doc"><p>Resample <em>grid</em> on the plane. Returns (image, us, vs, u, v, origin).</p>
+<p><code>image</code> is indexed [row, column], columns running along <code>u</code> and rows along <code>v</code>; <code>us</code> and <code>vs</code> are the sample positions as distances from <code>origin</code> along each. Points off the grid come back NaN. With <em>layers</em> above one the plane is averaged over that many cells along its normal.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-images">
+      <h2><a href="#da6idb-images">da6idb.images</a></h2>
+      <p class="lead">The detector&#x27;s image stack, and everything recorded alongside it.</p>
+      
+      <article class="entry" id="da6idb-images-nearest-index" data-name="nearest_index for each frame, the scan point closest to it in time.">
+        <h3><a href="#da6idb-images-nearest-index">nearest_index</a><span class="sig">(frame_epoch, scan_epoch)</span></h3>
+        <div class="doc"><p>For each frame, the scan point closest to it in time.</p>
+<p>Shared with <code>hkl_viewer</code>, which matches the master&#x27;s diffractometer angles onto the frames the same way.</p></div>
+      </article>
+      <article class="entry" id="da6idb-images-evenly-spaced-index" data-name="evenly_spaced_index map each frame onto a scan point by position, not by time.">
+        <h3><a href="#da6idb-images-evenly-spaced-index">evenly_spaced_index</a><span class="sig">(n_frames, n_scan_points)</span></h3>
+        <div class="doc"><p>Map each frame onto a scan point by position, not by time.</p>
+<p>Used only when the image file has no per-frame timestamp to match against (see <code>read_scan_channels</code>), so frame 0 takes scan point 0, the last frame takes the last scan point, and the rest are spread evenly in between.</p></div>
+      </article>
+      <article class="entry" id="da6idb-images-read-scan-channels" data-name="read_scan_channels the master file&#x27;s primary fields, resampled onto the image&#x27;s frames.">
+        <h3><a href="#da6idb-images-read-scan-channels">read_scan_channels</a><span class="sig">(image, frame_epoch, n_frames=None, master=None)</span></h3>
+        <div class="doc"><p>The master file&#x27;s primary fields, resampled onto the image&#x27;s frames.</p>
+<p>The detector free-runs, so the two files rarely have the same number of points -- 103 frames against 101 scan points is typical, the camera starting a moment early. Each frame therefore takes the value of the scan point nearest it in time; frames outside the scan hold the first or last point.</p>
+<p>When the image file carries no per-frame timestamp at all, there is no clock to match against, so frames are instead spread evenly across the master&#x27;s scan points by position (see <code>evenly_spaced_index</code>) -- a rougher alignment, but the best available without a time base.</p></div>
+      </article>
+      <article class="entry cls" id="da6idb-images-ImageData" data-name="ImageData the whole contents of one ``pva*.h5`` file, held in memory. n_frames frame_shape">
+        <h3><span class="kind">class</span><a href="#da6idb-images-ImageData">ImageData</a></h3>
+        <div class="doc"><p>The whole contents of one <code>pva*.h5</code> file, held in memory.</p>
+<p><code>stack</code> is <code>(n_frames, nx, ny)</code> float32 -- indexed <code>[frame, x, y]</code>, the file&#x27;s own <code>pixel_order=&#x27;xy&#x27;</code> convention, which is also what pyqtgraph&#x27;s default (col-major) <code>ImageItem</code> expects, so frames need no transposing to display the right way round.</p></div>
+        <p class="props"><span>properties</span> <code>n_frames</code> <code>frame_shape</code></p>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-rois">
+      <h2><a href="#da6idb-rois">da6idb.rois</a></h2>
+      <p class="lead">Rectangles on the detector, and what they reduce each frame to.</p>
+      
+      <article class="entry cls" id="da6idb-rois-Rect" data-name="Rect a region of interest: corner, size and angle, all in detector pixels. rotated from_roi from_stored corners sample_shape sample_points to_frame bbox pixel_count sub_frame from a pyqtgraph roi, so the windows can hand one straight over. from the dictionaries the files record. the four corners ``(x, y)``, going round, for drawing the rectangle. how many samples :meth:`sub_frame` takes along each axis. frame coordinates of every sample, shaped like the sub-image. where roi coordinates land on the frame, as ``(x, y)`` pixels. axis-aligned pixel bounds ``(x0, x1, y0, y1)``, clipped to *shape*. how many pixels it covers -- the n in a ``background x n`` correction. the pixels of one frame inside the rectangle.">
+        <h3><span class="kind">class</span><a href="#da6idb-rois-Rect">Rect</a></h3>
+        <div class="doc"><p>A region of interest: corner, size and angle, all in detector pixels.</p>
+<p>The angle turns the rectangle about its corner, which is what the viewers&#x27; handles do.</p></div>
+        <p class="props"><span>properties</span> <code>rotated</code></p>
+        <div class="method" id="da6idb-rois-Rect-from-roi">
+          <h4><a href="#da6idb-rois-Rect-from-roi">.from_roi</a><span class="sig">(cls, roi)</span></h4>
+          <div class="doc"><p>From a pyqtgraph ROI, so the windows can hand one straight over.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-from-stored">
+          <h4><a href="#da6idb-rois-Rect-from-stored">.from_stored</a><span class="sig">(cls, spec)</span></h4>
+          <div class="doc"><p>From the dictionaries the files record.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-corners">
+          <h4><a href="#da6idb-rois-Rect-corners">.corners</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The four corners <code>(x, y)</code>, going round, for drawing the rectangle.</p>
+<p>The same two axes <code>sub_frame</code> walks, so what is drawn is what is summed -- including the way the angle turns the rectangle about its corner rather than its centre.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-sample-shape">
+          <h4><a href="#da6idb-rois-Rect-sample-shape">.sample_shape</a><span class="sig">(self, shape)</span></h4>
+          <div class="doc"><p>How many samples <code>sub_frame</code> takes along each axis.</p>
+<p>Unrotated that is the clipped integer box; rotated it is one sample per pixel along each edge, counted from the geometry -- see <code>sub_frame</code> for why it cannot come from anywhere else.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-sample-points">
+          <h4><a href="#da6idb-rois-Rect-sample-points">.sample_points</a><span class="sig">(self, shape)</span></h4>
+          <div class="doc"><p>Frame coordinates of every sample, shaped like the sub-image.</p>
+<p>Two arrays laid out like <code>sub_frame</code>&#x27;s result, so a per-pixel quantity -- a scattering angle, say -- lines up with the counts.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-to-frame">
+          <h4><a href="#da6idb-rois-Rect-to-frame">.to_frame</a><span class="sig">(self, u, v, shape)</span></h4>
+          <div class="doc"><p>Where ROI coordinates land on the frame, as <code>(x, y)</code> pixels.</p>
+<p><code>reduce_frame</code> reports a centre of mass in the sub-image&#x27;s own coordinates, which is not where it sits on the detector. This undoes that, by the same route <code>sub_frame</code> took: a rotated rectangle is walked along its own axes from its corner, an unrotated one is a slice, so its origin is the clipped integer corner rather than the fractional one.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-bbox">
+          <h4><a href="#da6idb-rois-Rect-bbox">.bbox</a><span class="sig">(self, shape)</span></h4>
+          <div class="doc"><p>Axis-aligned pixel bounds <code>(x0, x1, y0, y1)</code>, clipped to <em>shape</em>.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-pixel-count">
+          <h4><a href="#da6idb-rois-Rect-pixel-count">.pixel_count</a><span class="sig">(self, shape, frame=None)</span></h4>
+          <div class="doc"><p>How many pixels it covers -- the N in a <code>background x N</code> correction.</p></div>
+        </div>
+        <div class="method" id="da6idb-rois-Rect-sub-frame">
+          <h4><a href="#da6idb-rois-Rect-sub-frame">.sub_frame</a><span class="sig">(self, frame)</span></h4>
+          <div class="doc"><p>The pixels of one frame inside the rectangle.</p>
+<p>Unrotated this is a slice, deliberately: resampling it instead would round the fractional edges differently and make a number disagree with itself depending on which way it was asked for. Rotated, the rectangle is walked along its own axes and the frame sampled where it lands.</p></div>
+        </div>
+      </article>
+      <article class="entry" id="da6idb-rois-reduce-frame" data-name="reduce_frame ``(sum, mean, min, max, comx, comy)`` of one sub-image indexed ``[x, y]``.">
+        <h3><a href="#da6idb-rois-reduce-frame">reduce_frame</a><span class="sig">(sub)</span></h3>
+        <div class="doc"><p><code>(sum, mean, min, max, comx, comy)</code> of one sub-image indexed <code>[x, y]</code>.</p></div>
+      </article>
+      <article class="entry" id="da6idb-rois-empty-series" data-name="empty_series every metric, all zero -- what a rectangle off the detector reduces to.">
+        <h3><a href="#da6idb-rois-empty-series">empty_series</a><span class="sig">(n_frames)</span></h3>
+        <div class="doc"><p>Every metric, all zero -- what a rectangle off the detector reduces to.</p></div>
+      </article>
+      <article class="entry" id="da6idb-rois-sub-frames" data-name="sub_frames each frame&#x27;s pixels inside *rect*, laid out like :meth:`rect.sample_points`.">
+        <h3><a href="#da6idb-rois-sub-frames">sub_frames</a><span class="sig">(stack, rect)</span></h3>
+        <div class="doc"><p>Each frame&#x27;s pixels inside <em>rect</em>, laid out like <code>sample_points</code>.</p>
+<p>Yields <code>None</code> for a frame the rectangle misses entirely. Unrotated this is a slice per frame, rotated it resamples, exactly as <code>series</code> does -- the two must agree pixel for pixel.</p></div>
+      </article>
+      <article class="entry" id="da6idb-rois-series" data-name="series every metric, for every frame.">
+        <h3><a href="#da6idb-rois-series">series</a><span class="sig">(stack, rect)</span></h3>
+        <div class="doc"><p>Every metric, for every frame.</p>
+<p>An unrotated rectangle is one slice of the whole stack, so the reductions run over all frames at once; a rotated one is resampled frame by frame.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-scan">
+      <h2><a href="#da6idb-scan">da6idb.scan</a></h2>
+      <p class="lead">Reading a master file: its metadata, its streams and the numbers in them.</p>
+      
+      <article class="entry" id="da6idb-scan-stream-fields" data-name="stream_fields field names under *stream* that carry a ``value`` dataset.">
+        <h3><a href="#da6idb-scan-stream-fields">stream_fields</a><span class="sig">(path, stream)</span></h3>
+        <div class="doc"><p>Field names under <em>stream</em> that carry a <code>value</code> dataset.</p>
+<p>h5py iterates group keys in name order (no <code>track_order</code> here), so this is also the order <code>default_x_field</code> treats as &quot;last&quot;.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-read-primary" data-name="read_primary read the ``value`` array of each of *fields* from the primary stream.">
+        <h3><a href="#da6idb-scan-read-primary">read_primary</a><span class="sig">(path, fields)</span></h3>
+        <div class="doc"><p>Read the <code>value</code> array of each of <em>fields</em> from the primary stream.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-read-baseline" data-name="read_baseline return ``{field: (before, after)}`` from the baseline stream.">
+        <h3><a href="#da6idb-scan-read-baseline">read_baseline</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>Return <code>{field: (before, after)}</code> from the baseline stream.</p>
+<p><code>before</code>/<code>after</code> are <code>float</code> for a scalar field, or a text summary for an array-valued one (see <code>_scalarize</code>).</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-read-scan-info" data-name="read_scan_info what the scan was: plan, points, motors and the range they covered.">
+        <h3><a href="#da6idb-scan-read-scan-info">read_scan_info</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>What the scan was: plan, points, motors and the range they covered.</p>
+<p>The motor names come from the <code>motors</code> metadata, and each one&#x27;s actual travel is read back from its own field in the primary stream -- the requested range in <code>plan_args</code> is not necessarily what the motor did.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-describe-fields" data-name="describe_fields every field in *stream*, with what it is and the range it covered.">
+        <h3><a href="#da6idb-scan-describe-fields">describe_fields</a><span class="sig">(path, stream=&#x27;primary&#x27;)</span></h3>
+        <div class="doc"><p>Every field in <em>stream</em>, with what it is and the range it covered.</p>
+<p>This answers the question you have in front of an unfamiliar scan: which name goes in as x, as y, as the monitor. Nothing here is guessed from the name -- <em>role</em> comes from the plan&#x27;s own <code>motors</code> list, the <code>signal_type</code> each field group carries and the PV it was read from, and <em>hinted</em> marks the detector the plan itself nominated in <code>hints</code>.</p>
+<p>Returns one dict per field, the motor the scan moved first and the fields that never moved last.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-default-x-field" data-name="default_x_field the last field, skipping trailing time-like ones (e.g. ``scaler_time``).">
+        <h3><a href="#da6idb-scan-default-x-field">default_x_field</a><span class="sig">(fields)</span></h3>
+        <div class="doc"><p>The last field, skipping trailing time-like ones (e.g. <code>scaler_time</code>).</p>
+<p>Only a fallback: <code>scan_x_field</code> asks the scan what it moved.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-scan-x-field" data-name="scan_x_field the field to plot against: the motor this scan actually moved.">
+        <h3><a href="#da6idb-scan-scan-x-field">scan_x_field</a><span class="sig">(path, fields)</span></h3>
+        <div class="doc"><p>The field to plot against: the motor this scan actually moved.</p>
+<p>Taken from the <code>motors</code> metadata rather than guessed from the field ordering, and preferring the motor&#x27;s readback over its setpoint. Returns <code>None</code> when the scan names no motor that was recorded.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-scan-hkl" data-name="scan_hkl mean and spread of psic_h/k/l over the scan, or none if not recorded.">
+        <h3><a href="#da6idb-scan-scan-hkl">scan_hkl</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>Mean and spread of psic_h/k/l over the scan, or None if not recorded.</p>
+<p>The spread matters as much as the mean: on a rocking curve one of the three sweeps across the peak while the others hold still, and a bare average would read like a fixed position.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-format-scan-hkl" data-name="format_scan_hkl ``h 1.0135 k -0.4926 ± 0.0386 l 7.4840`` for one scan.">
+        <h3><a href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><span class="sig">(values, decimals=4)</span></h3>
+        <div class="doc"><p><code>H 1.0135  K -0.4926 ± 0.0386  L 7.4840</code> for one scan.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-read-grid" data-name="read_grid *value_field* laid out over a two-motor grid scan, or ``none``.">
+        <h3><a href="#da6idb-scan-read-grid">read_grid</a><span class="sig">(path, value_field, monitor_field=&#x27;&#x27;)</span></h3>
+        <div class="doc"><p><em>value_field</em> laid out over a two-motor grid scan, or <code>None</code>.</p>
+<p><code>None</code> means &quot;not a raster&quot;: a two-motor <code>inner_product</code> scan moves both motors together, so its axes have as many levels as there are points and the product test in <code>_build_grid</code> fails, which is exactly what tells the two plans apart without relying on the plan name.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-axis-edges" data-name="axis_edges cell boundaries around the grid&#x27;s sample positions.">
+        <h3><a href="#da6idb-scan-axis-edges">axis_edges</a><span class="sig">(values)</span></h3>
+        <div class="doc"><p>Cell boundaries around the grid&#x27;s sample positions.</p>
+<p>Midway between neighbours, with the outer two extended by half their own spacing, so uneven steps keep their proportions.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-curve-stats" data-name="curve_stats max/min (with position), and fwhm center/width, for one plotted curve.">
+        <h3><a href="#da6idb-scan-curve-stats">curve_stats</a><span class="sig">(x, y)</span></h3>
+        <div class="doc"><p>Max/min (with position), and FWHM center/width, for one plotted curve.</p>
+<p><code>center</code>/<code>fwhm</code> come from linearly-interpolated crossings of the half-max level (halfway between the curve&#x27;s min and max) either side of the peak -- the same convention tools like SPEC&#x27;s peak search use -- rather than a fit, so they are <code>None</code> when the peak sits at an end of the data (no crossing on that side).</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-grid-stats" data-name="grid_stats max/min of a grid and the (x, y) they sit at.">
+        <h3><a href="#da6idb-scan-grid-stats">grid_stats</a><span class="sig">(grid)</span></h3>
+        <div class="doc"><p>Max/min of a grid and the (x, y) they sit at.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-session">
+      <h2><a href="#da6idb-session">da6idb.session</a></h2>
+      <p class="lead">The objects a notebook starts from.</p>
+      
+      <article class="entry" id="da6idb-session-open-folder" data-name="open_folder every scan in *directory*, ready to be listed or picked from.">
+        <h3><a href="#da6idb-session-open-folder">open_folder</a><span class="sig">(directory)</span></h3>
+        <div class="doc"><p>Every scan in <em>directory</em>, ready to be listed or picked from.</p></div>
+      </article>
+      <article class="entry" id="da6idb-session-open-scan" data-name="open_scan one scan, by the path of its master file.">
+        <h3><a href="#da6idb-session-open-scan">open_scan</a><span class="sig">(master)</span></h3>
+        <div class="doc"><p>One scan, by the path of its master file.</p></div>
+      </article>
+      <article class="entry cls" id="da6idb-session-ScanSet" data-name="ScanSet the scans in one directory, indexed by scan number. numbers summary one row per scan: what it was, what moved, how far, how many points.">
+        <h3><span class="kind">class</span><a href="#da6idb-session-ScanSet">ScanSet</a></h3>
+        <div class="doc"><p>The scans in one directory, indexed by scan number.</p></div>
+        <p class="props"><span>properties</span> <code>numbers</code></p>
+        <div class="method" id="da6idb-session-ScanSet-summary">
+          <h4><a href="#da6idb-session-ScanSet-summary">.summary</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>One row per scan: what it was, what moved, how far, how many points.</p></div>
+        </div>
+      </article>
+      <article class="entry cls" id="da6idb-session-Scan" data-name="Scan one scan: its master file, and everything reachable from it. number plan motors points info fields field_names primary baseline curve statistics hkl_position map images hkl every field you can plot, with what it is and the range it covered. just the names, in file order, including epoch and index. the primary stream, one column per field, one row per scan point. what the baseline recorded before and after the scan. one x column and one or more y columns, normalised if asked. peak statistics for each y: maximum, minimum, centre and width. where the diffractometer was, averaged over the scan. a two-motor raster as a labelled 2d array, or none if it is not one. the detector frames for this scan, found as the viewers find them. this scan in reciprocal space, geometry and all.">
+        <h3><span class="kind">class</span><a href="#da6idb-session-Scan">Scan</a></h3>
+        <div class="doc"><p>One scan: its master file, and everything reachable from it.</p></div>
+        <p class="props"><span>properties</span> <code>number</code> <code>plan</code> <code>motors</code> <code>points</code> <code>info</code></p>
+        <div class="method" id="da6idb-session-Scan-fields">
+          <h4><a href="#da6idb-session-Scan-fields">.fields</a><span class="sig">(self, stream=&#x27;primary&#x27;)</span></h4>
+          <div class="doc"><p>Every field you can plot, with what it is and the range it covered.</p>
+<p>Indexed by field name, so <code>.fields().index</code> is the plain list. <em>role</em> says whether a field is the motor the scan moved, a detector channel or a positioner read along the way; <em>hinted</em> marks the detector the plan nominated; <em>varies</em> with <em>min</em> and <em>max</em> shows at a glance which fields are worth an axis and which sat still -- a near-constant positive channel like an ion chamber is your monitor. The scanned motor sorts first, the fields that never moved last.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-field-names">
+          <h4><a href="#da6idb-session-Scan-field-names">.field_names</a><span class="sig">(self, stream=&#x27;primary&#x27;)</span></h4>
+          <div class="doc"><p>Just the names, in file order, including EPOCH and INDEX.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-primary">
+          <h4><a href="#da6idb-session-Scan-primary">.primary</a><span class="sig">(self, fields=None)</span></h4>
+          <div class="doc"><p>The primary stream, one column per field, one row per scan point.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-baseline">
+          <h4><a href="#da6idb-session-Scan-baseline">.baseline</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>What the baseline recorded before and after the scan.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-curve">
+          <h4><a href="#da6idb-session-Scan-curve">.curve</a><span class="sig">(self, x=None, y=None, normalise=None)</span></h4>
+          <div class="doc"><p>One x column and one or more y columns, normalised if asked.</p>
+<p>With no <em>x</em> the scan&#x27;s own motor is used, falling back to the point index for a plan that moved nothing -- the same choice the browser makes.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-statistics">
+          <h4><a href="#da6idb-session-Scan-statistics">.statistics</a><span class="sig">(self, y, x=None, normalise=None)</span></h4>
+          <div class="doc"><p>Peak statistics for each y: maximum, minimum, centre and width.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-hkl-position">
+          <h4><a href="#da6idb-session-Scan-hkl-position">.hkl_position</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>Where the diffractometer was, averaged over the scan.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-map">
+          <h4><a href="#da6idb-session-Scan-map">.map</a><span class="sig">(self, value, normalise=&#x27;&#x27;)</span></h4>
+          <div class="doc"><p>A two-motor raster as a labelled 2D array, or None if it is not one.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-images">
+          <h4><a href="#da6idb-session-Scan-images">.images</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The detector frames for this scan, found as the viewers find them.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Scan-hkl">
+          <h4><a href="#da6idb-session-Scan-hkl">.hkl</a><span class="sig">(self, **kwargs)</span></h4>
+          <div class="doc"><p>This scan in reciprocal space, geometry and all.</p></div>
+        </div>
+      </article>
+      <article class="entry cls" id="da6idb-session-Images" data-name="Images the detector frames for one scan, and what was recorded with them. stack n_frames frame_shape rois frame channels rect show roi_series roi_curve geometry converter two_theta_angles two_theta one frame, indexed ``[x, y]`` as the file stores it. everything recorded per frame, including the master&#x27;s own channels. one roi as a rectangle. one frame with its rois drawn on it, so you can place a new one. every metric for one roi, frame by frame. one roi&#x27;s metric against frame number. the instrument description for this scan, read once and kept. the xrayutilities converter for this geometry, built once. the scattering angle of what *roi* held, frame by frame. one two theta for the whole scan: :meth:`two_theta_angles` averaged.">
+        <h3><span class="kind">class</span><a href="#da6idb-session-Images">Images</a></h3>
+        <div class="doc"><p>The detector frames for one scan, and what was recorded with them.</p></div>
+        <p class="props"><span>properties</span> <code>stack</code> <code>n_frames</code> <code>frame_shape</code> <code>rois</code></p>
+        <div class="method" id="da6idb-session-Images-frame">
+          <h4><a href="#da6idb-session-Images-frame">.frame</a><span class="sig">(self, index)</span></h4>
+          <div class="doc"><p>One frame, indexed <code>[x, y]</code> as the file stores it.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-channels">
+          <h4><a href="#da6idb-session-Images-channels">.channels</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>Everything recorded per frame, including the master&#x27;s own channels.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-rect">
+          <h4><a href="#da6idb-session-Images-rect">.rect</a><span class="sig">(self, roi=0)</span></h4>
+          <div class="doc"><p>One ROI as a rectangle.</p>
+<p>Takes an index into <code>rois</code>, one of those rows as a dict, a <code>Rect</code>, or a plain <code>(x, y, w, h)</code> -- <code>(x, y, w, h, angle)</code> to turn it about its corner. Everything that reduces an ROI goes through here, so a rectangle you make up is worth exactly as much as one the detector recorded.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-show">
+          <h4><a href="#da6idb-session-Images-show">.show</a><span class="sig">(self, frame=0, rois=None, log=False, ax=None, cmap=&#x27;viridis&#x27;, **kwargs)</span></h4>
+          <div class="doc"><p>One frame with its ROIs drawn on it, so you can place a new one.</p>
+<p>Oriented like the image viewer -- x across, y down -- and labelled in detector pixels, so a rectangle read off these axes can go straight back in as <code>(x, y, w, h)</code>. <em>rois</em> defaults to the ones the file records; pass a list of your own, or <code>()</code> for a bare frame. Returns the matplotlib axes, to draw on further or save.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-roi-series">
+          <h4><a href="#da6idb-session-Images-roi-series">.roi_series</a><span class="sig">(self, roi=0)</span></h4>
+          <div class="doc"><p>Every metric for one ROI, frame by frame.</p>
+<p>The same arithmetic the image viewer runs, rotation included, so a number read here and a number read there are the same number.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-roi-curve">
+          <h4><a href="#da6idb-session-Images-roi-curve">.roi_curve</a><span class="sig">(self, roi=0, metric=&#x27;sum&#x27;, normalise=None, background=None)</span></h4>
+          <div class="doc"><p>One ROI&#x27;s metric against frame number.</p>
+<p>With <em>background</em> -- another ROI -- its mean per pixel is taken off the pixel-value metrics, the sum losing it times the pixel count, as the viewer does. The centre of mass is deliberately left on the raw pixels: weighting a centroid by background-subtracted values goes unstable wherever the corrected sum passes through zero.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-geometry">
+          <h4><a href="#da6idb-session-Images-geometry">.geometry</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The instrument description for this scan, read once and kept.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-converter">
+          <h4><a href="#da6idb-session-Images-converter">.converter</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The xrayutilities converter for this geometry, built once.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-two-theta-angles">
+          <h4><a href="#da6idb-session-Images-two-theta-angles">.two_theta_angles</a><span class="sig">(self, roi=0, background=None)</span></h4>
+          <div class="doc"><p>The scattering angle of what <em>roi</em> held, frame by frame.</p>
+<p>The detector circle reads the angle of the centre pixel, so a feature anywhere else is at a different two theta. This asks xrayutilities for the angle of every pixel in the region, through the same geometry the HKL conversion uses, and averages them weighted by the counts in each -- both detector circles included, not just delta.</p>
+<p><em>background</em> is another ROI whose mean per pixel is taken off first, which matters: background spread evenly over the box pulls the answer towards the middle of the box rather than towards the feature. A frame left with nothing above background gets NaN.</p>
+<p><em>roi</em> is anything <code>rect</code> takes, or <code>None</code> for the whole frame. Returns one angle in degrees per frame.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-Images-two-theta">
+          <h4><a href="#da6idb-session-Images-two-theta">.two_theta</a><span class="sig">(self, roi=0, background=None, weight=&#x27;sum&#x27;)</span></h4>
+          <div class="doc"><p>One two theta for the whole scan: <code>two_theta_angles</code> averaged.</p>
+<p>Weighted by <em>weight</em>, an ROI metric, so the frames where the feature was lit count for more than the ones where the box held nothing. The default weighs by the counts actually used -- background-subtracted, when <em>background</em> is given, which is what makes the weighting mean anything on a region whose background is a large part of its sum. Pass <code>weight=None</code> for a plain mean over the frames.</p>
+<p>The average is taken over the per-frame angles rather than over one summed image, so it stays right if the detector moved during the scan.</p></div>
+        </div>
+      </article>
+      <article class="entry cls" id="da6idb-session-HklMap" data-name="HklMap one scan in reciprocal space: the geometry, the cloud, the grid. sources cloud resolution extent grid slice cut where each piece of the geometry came from. the surviving pixels as h, k, l and intensity. the cell the sampling supports, and what it was measured from. the h, k, l box the scan actually reaches. bin onto a regular lattice and hand back a labelled cube. a plane through the grid, as a labelled 2d array. intensity along the line between two h, k, l points.">
+        <h3><span class="kind">class</span><a href="#da6idb-session-HklMap">HklMap</a></h3>
+        <div class="doc"><p>One scan in reciprocal space: the geometry, the cloud, the grid.</p></div>
+        
+        <div class="method" id="da6idb-session-HklMap-sources">
+          <h4><a href="#da6idb-session-HklMap-sources">.sources</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>Where each piece of the geometry came from.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-cloud">
+          <h4><a href="#da6idb-session-HklMap-cloud">.cloud</a><span class="sig">(self, threshold=0.0, max_points=2000000, **kwargs)</span></h4>
+          <div class="doc"><p>The surviving pixels as H, K, L and intensity.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-resolution">
+          <h4><a href="#da6idb-session-HklMap-resolution">.resolution</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The cell the sampling supports, and what it was measured from.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-extent">
+          <h4><a href="#da6idb-session-HklMap-extent">.extent</a><span class="sig">(self)</span></h4>
+          <div class="doc"><p>The H, K, L box the scan actually reaches.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-grid">
+          <h4><a href="#da6idb-session-HklMap-grid">.grid</a><span class="sig">(self, hkl_range=None, oversample=1.0, output=None, reuse=True, **kwargs)</span></h4>
+          <div class="doc"><p>Bin onto a regular lattice and hand back a labelled cube.</p>
+<p>The same <code>.vti</code> the viewers cache, so a grid made here opens there and the other way round.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-slice">
+          <h4><a href="#da6idb-session-HklMap-slice">.slice</a><span class="sig">(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)</span></h4>
+          <div class="doc"><p>A plane through the grid, as a labelled 2D array.</p>
+<p>Cells the scan never reached come back as NaN, as they do from <code>grid</code>, so they are left blank by <code>.plot()</code> and kept out of its colour scaling rather than painted the bottom colour.</p>
+<p>The plane is placed either by <em>offset</em> -- how far along the normal from the centre of the map -- or by <em>point</em>, an H, K, L the plane must pass through, which is usually what you actually know. The result records both, and with a <em>point</em> the plane&#x27;s own coordinates are measured from it.</p>
+<p>Cuts the lattice <code>grid</code> last built unless told otherwise, so asking for a coarse grid and then slicing it does not quietly produce a second one at full resolution.</p></div>
+        </div>
+        <div class="method" id="da6idb-session-HklMap-cut">
+          <h4><a href="#da6idb-session-HklMap-cut">.cut</a><span class="sig">(self, start, end, samples=None, width=1, normal=None, **kwargs)</span></h4>
+          <div class="doc"><p>Intensity along the line between two H, K, L points.</p>
+<p>The cut is named by its two ends rather than drawn by hand, so it can be written down, repeated on the next scan, and read back from the table it returns. <em>width</em> averages that many parallel lines either side, and <em>normal</em> -- the slice&#x27;s own normal -- keeps that widening inside the plane.</p>
+<p>Cuts the lattice <code>grid</code> last built, like <code>slice</code>. Returns one row per sample: distance from <em>start</em>, the H, K, L there, and the intensity, NaN where the scan did not reach.</p></div>
+        </div>
+      </article>
+    </section>
+    <p id="empty" class="hidden">Nothing matches that.</p>
+  </main>
+</div>
+<script>
+  const box = document.getElementById('find');
+  const entries = [...document.querySelectorAll('.entry')];
+  const sections = [...document.querySelectorAll('section.module')];
+  const empty = document.getElementById('empty');
+  box.addEventListener('input', () => {
+    const q = box.value.trim().toLowerCase();
+    let shown = 0;
+    for (const entry of entries) {
+      const hit = !q || entry.dataset.name.includes(q);
+      entry.classList.toggle('hidden', !hit);
+      if (hit) shown++;
+    }
+    for (const section of sections) {
+      const any = section.querySelector('.entry:not(.hidden)');
+      section.classList.toggle('hidden', !any);
+    }
+    empty.classList.toggle('hidden', shown > 0);
+  });
+</script>
+</body>
+</html>

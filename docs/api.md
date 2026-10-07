@@ -1,7 +1,9 @@
 # `da6idb` — every public function
 
-Generated from the source by `python docs/make_api.py`; regenerate it rather
-than editing it, so it cannot drift from the code.
+Generated from the source: `python docs/make_api.py > docs/api.md` for this
+list, `python docs/make_api_html.py` for `api.html`, which is the same thing
+with every docstring in full. Regenerate rather than edit, so neither can
+drift from the code.
 
 Nothing here needs Qt. The reading modules need only numpy, h5py and scipy;
 `da6idb.session` adds pandas and xarray; `da6idb.hkl` adds xrayutilities and
