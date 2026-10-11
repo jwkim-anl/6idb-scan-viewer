@@ -1,0 +1,8 @@
+[
+ "rp100_output2_voltage",
+ "temp340_control_setpoint",
+ "temp340_control",
+ "cryo_z",
+ "cryo_z_user_setpoint",
+ "temp340_sample"
+]

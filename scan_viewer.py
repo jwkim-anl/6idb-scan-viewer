@@ -68,6 +68,7 @@ import pyqtgraph as pg
 from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
 from da6idb import combine as _combine
 from da6idb import export as _export
+from da6idb import trends as _trends
 from da6idb import fit as _fit
 from da6idb.scan import (
     axis_edges,
@@ -406,6 +407,32 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.peaks_spin.valueChanged.connect(self._update_plot)
         axis_row.addWidget(self.peaks_spin)
+
+        self.trend_btn = QtWidgets.QPushButton("Trend")
+        self.trend_btn.setCheckable(True)
+        self.trend_btn.setToolTip(
+            "Plot one point per scan instead of the curves: a fitted\n"
+            "quantity against whatever was stepped between them.\n"
+            "Needs a fit, and at least two scans selected."
+        )
+        self.trend_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.trend_btn)
+
+        self.trend_x_combo = QtWidgets.QComboBox()
+        self.trend_x_combo.setToolTip(
+            "What to plot against. The baseline fields offered are the ones\n"
+            "that actually moved across the selection, ranked by how far\n"
+            "they moved relative to their own drift within a scan -- so the\n"
+            "thing somebody deliberately stepped comes out at the top."
+        )
+        self.trend_x_combo.currentIndexChanged.connect(self._update_plot)
+        axis_row.addWidget(self.trend_x_combo)
+
+        self.trend_y_combo = QtWidgets.QComboBox()
+        self.trend_y_combo.addItems(_trends.TREND_QUANTITIES)
+        self.trend_y_combo.setToolTip("Which fitted quantity to follow.")
+        self.trend_y_combo.currentIndexChanged.connect(self._update_plot)
+        axis_row.addWidget(self.trend_y_combo)
 
         self.export_btn = QtWidgets.QPushButton("Export curves…")
         self.export_btn.setToolTip(
@@ -1043,6 +1070,10 @@ class HdfViewer(QtWidgets.QMainWindow):
             self.coord_label.setText("")       # the colour map's last readout
         self.plot_stack.setCurrentIndex(0)
 
+        if self.trend_btn.isChecked():
+            self._draw_trend(paths, x_field, y_fields, monitor_field)
+            return
+
         overlay = len(paths) > 1
         stats_rows: list[tuple[str, dict[str, float | None]]] = []
         curves: list[tuple[str, np.ndarray, np.ndarray]] = []
@@ -1283,6 +1314,79 @@ class HdfViewer(QtWidgets.QMainWindow):
         for column, text in enumerate(values):
             self.stats_table.setItem(0, column, QtWidgets.QTableWidgetItem(text))
         self.stats_table.resizeColumnsToContents()
+
+    def _refresh_trend_axes(self, paths):
+        """Offer the scan number, then whatever moved across the selection."""
+        choices = [_trends.TREND_X_SCAN] + _trends.baseline_trend_fields(paths)
+        current = self.trend_x_combo.currentText()
+        if [self.trend_x_combo.itemText(i)
+                for i in range(self.trend_x_combo.count())] == choices:
+            return
+        self._syncing_fields = True
+        try:
+            self.trend_x_combo.clear()
+            self.trend_x_combo.addItems(choices)
+            if current in choices:
+                self.trend_x_combo.setCurrentText(current)
+        finally:
+            self._syncing_fields = False
+
+    def _draw_trend(self, paths, x_field, y_fields, monitor_field):
+        """One point per scan: a fitted quantity against what was stepped."""
+        self._refresh_trend_axes(paths)
+        shape = self.fit_combo.currentText()
+        if shape == FIT_NONE:
+            self.curve_item.setTitle("Choose a fit shape to trend.")
+            self.stats_table.setRowCount(0)
+            self._last_curves = []
+            return
+        against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
+        key = _trends.TREND_QUANTITIES[self.trend_y_combo.currentText()]
+        axis = _trends.trend_axis(paths, against)
+
+        series: dict[str, list[tuple[float, float]]] = {}
+        rows, skipped = [], 0
+        for path in paths:
+            where = axis.get(str(path))
+            data = read_primary(path, sorted({x_field, *y_fields}))
+            x = data.get(x_field)
+            monitor = data.get(monitor_field) if monitor_field else None
+            for y_field in y_fields:
+                y = data.get(y_field)
+                if x is None or y is None:
+                    continue
+                if monitor is not None:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        y = np.where(monitor != 0, y / monitor, np.nan)
+                if where is None:
+                    skipped += 1
+                    continue
+                got = _fit.peak_fit(x, y, shape)
+                value = got.get(key)
+                if value is None:
+                    continue
+                series.setdefault(y_field, []).append((where, float(value)))
+                rows.append((f"{scan_number(path)}: {y_field}", got))
+
+        self._clear_curves()
+        for index, (name, points) in enumerate(sorted(series.items())):
+            points.sort()
+            color = CURVE_COLORS[index % len(CURVE_COLORS)]
+            self.curve_item.plot(
+                [p[0] for p in points], [p[1] for p in points], name=name,
+                pen=pg.mkPen(color, width=1), symbol="o", symbolSize=6,
+                symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color))
+        self.curve_item.setLabel("bottom", against)
+        self.curve_item.setLabel("left", self.trend_y_combo.currentText())
+        title = f"{sum(len(v) for v in series.values())} fitted point(s)"
+        if skipped:
+            title += f"   [{skipped} scan(s) have no {against}]"
+        self.curve_item.setTitle(title)
+        self.curve_vb.enableAutoRange(); self.curve_vb.updateAutoRange()
+        self._last_curves = [
+            (name, np.array([p[0] for p in pts]), np.array([p[1] for p in pts]))
+            for name, pts in sorted(series.items())]
+        self._update_stats_table(rows)
 
     def _export_curves(self):
         """Write the plotted curves as columns, with their provenance."""

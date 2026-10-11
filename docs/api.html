@@ -102,8 +102,8 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 143 callables, 10 classes across
-    14 modules · generated from the source on 2026-10-11 by
+    Version 0.1.0.dev0 · 145 callables, 10 classes across
+    15 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
   <p class="meta">
@@ -130,6 +130,7 @@
 <li><a class="m" href="#da6idb-rois">da6idb.rois</a><div class="sub"><a class="n" href="#da6idb-rois-Rect">Rect</a><a class="n" href="#da6idb-rois-reduce-frame">reduce_frame</a><a class="n" href="#da6idb-rois-empty-series">empty_series</a><a class="n" href="#da6idb-rois-sub-frames">sub_frames</a><a class="n" href="#da6idb-rois-series">series</a></div></li>
 <li><a class="m" href="#da6idb-scan">da6idb.scan</a><div class="sub"><a class="n" href="#da6idb-scan-resolve-hint-field">resolve_hint_field</a><a class="n" href="#da6idb-scan-scan-y-fields">scan_y_fields</a><a class="n" href="#da6idb-scan-stream-fields">stream_fields</a><a class="n" href="#da6idb-scan-read-primary">read_primary</a><a class="n" href="#da6idb-scan-read-baseline">read_baseline</a><a class="n" href="#da6idb-scan-read-scan-info">read_scan_info</a><a class="n" href="#da6idb-scan-describe-fields">describe_fields</a><a class="n" href="#da6idb-scan-default-x-field">default_x_field</a><a class="n" href="#da6idb-scan-scan-x-field">scan_x_field</a><a class="n" href="#da6idb-scan-scan-hkl">scan_hkl</a><a class="n" href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><a class="n" href="#da6idb-scan-read-grid">read_grid</a><a class="n" href="#da6idb-scan-axis-edges">axis_edges</a><a class="n" href="#da6idb-scan-curve-stats">curve_stats</a><a class="n" href="#da6idb-scan-clipped-limits">clipped_limits</a><a class="n" href="#da6idb-scan-lone-dropouts">lone_dropouts</a><a class="n" href="#da6idb-scan-scale-extend">scale_extend</a><a class="n" href="#da6idb-scan-centered-limits">centered_limits</a><a class="n" href="#da6idb-scan-grid-stats">grid_stats</a></div></li>
 <li><a class="m" href="#da6idb-session">da6idb.session</a><div class="sub"><a class="n" href="#da6idb-session-open-folder">open_folder</a><a class="n" href="#da6idb-session-open-scan">open_scan</a><a class="n" href="#da6idb-session-ScanSet">ScanSet</a><a class="n" href="#da6idb-session-Scan">Scan</a><a class="n" href="#da6idb-session-Images">Images</a><a class="n" href="#da6idb-session-HklMap">HklMap</a></div></li>
+<li><a class="m" href="#da6idb-trends">da6idb.trends</a><div class="sub"><a class="n" href="#da6idb-trends-baseline-trend-fields">baseline_trend_fields</a><a class="n" href="#da6idb-trends-trend-axis">trend_axis</a></div></li>
   </ul></nav>
   <main>
 
@@ -967,6 +968,24 @@
 <p>The cut is named by its two ends rather than drawn by hand, so it can be written down, repeated on the next scan, and read back from the table it returns. <em>width</em> averages that many parallel lines either side, and <em>normal</em> -- the slice&#x27;s own normal -- keeps that widening inside the plane.</p>
 <p>Cuts the lattice <code>grid</code> last built, like <code>slice</code>. Returns one row per sample: distance from <em>start</em>, the H, K, L there, and the intensity, NaN where the scan did not reach.</p></div>
         </div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-trends">
+      <h2><a href="#da6idb-trends">da6idb.trends</a></h2>
+      <p class="lead">What was stepped across a set of scans, and plotting against it.</p>
+      
+      <article class="entry" id="da6idb-trends-baseline-trend-fields" data-name="baseline_trend_fields baseline fields worth trending against, most deliberate first.">
+        <h3><a href="#da6idb-trends-baseline-trend-fields">baseline_trend_fields</a><span class="sig">(paths)</span></h3>
+        <div class="doc"><p>Baseline fields worth trending against, most deliberate first.</p>
+<p>The answer to &quot;what was stepped across these scans&quot;: every numeric field the whole selection recorded, whose motion over the selection clears the noise bar BASELINE_TREND_SNR and BASELINE_TREND_NOISE describe, best first. Fewer than two scans gives <code>[]</code> -- one point has nothing to be plotted against.</p>
+<p>Ordered by how far each moved relative to its own noise rather than alphabetically, so the motor somebody deliberately drove comes out at the top: scans 32 to 39 put huber_euler_ana_eta third of 19, behind only its own setpoint and the huber_hp alias that reads the same encoder.</p>
+<p>The ranking is of one selection against itself, so it says nothing about a wider one. Over all 146 TiSe2 scans at once eta falls below the bar altogether, correctly -- somewhere in those 146 it was moving <em>during</em> a scan, and a field that will not hold still inside one scan cannot be the axis that scan sits at.</p></div>
+      </article>
+      <article class="entry" id="da6idb-trends-trend-axis" data-name="trend_axis where each scan sits on the trend axis, keyed by ``str(path)``.">
+        <h3><a href="#da6idb-trends-trend-axis">trend_axis</a><span class="sig">(paths, against)</span></h3>
+        <div class="doc"><p>Where each scan sits on the trend axis, keyed by <code>str(path)</code>.</p>
+<p><code>TREND_X_SCAN</code> reads the number out of the file name; anything else is a baseline field, taken as the mean of its readings before and after -- the scan sat between them. A scan that cannot supply a value is left out rather than given one, since a point with no x has nowhere to go.</p></div>
       </article>
     </section>
     <p id="empty" class="hidden">Nothing matches that.</p>

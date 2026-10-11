@@ -15,6 +15,7 @@ pyvista.
 | `da6idb.scan` | the master: metadata, streams, rasters, peak statistics |
 | `da6idb.fit` | peak shapes fitted to a curve, one or several |
 | `da6idb.combine` | which scans are repeats, and averaging them |
+| `da6idb.trends` | what was stepped across a set of scans |
 | `da6idb.images` | the detector stack, its channels and its stored ROIs |
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |
@@ -254,4 +255,11 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 143 callables, 10 classes -->
+### `da6idb.trends`
+
+What was stepped across a set of scans, and plotting against it.
+
+- `baseline_trend_fields(paths)` — Baseline fields worth trending against, most deliberate first.
+- `trend_axis(paths, against)` — Where each scan sits on the trend axis, keyed by ``str(path)``.
+
+<!-- 145 callables, 10 classes -->
