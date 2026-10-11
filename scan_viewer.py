@@ -214,6 +214,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._syncing_fields = False
         self._colorbar = None
         self._last_curves: list = []
+        self._last_trend: list = []
         self._last_mode = ""
         self._x_is_auto = True
         self._manual_x = ""
@@ -441,6 +442,16 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.trend_y_combo.currentIndexChanged.connect(self._update_plot)
         fit_row.addWidget(self.trend_y_combo)
+
+        self.trend_export_btn = QtWidgets.QPushButton("Export trend…")
+        self.trend_export_btn.setToolTip(
+            "Write the points on the trend plot: the axis, and the fitted\n"
+            "quantity for each Y field. The header records the fit they\n"
+            "came from and the scans that were fitted."
+        )
+        self.trend_export_btn.setEnabled(False)
+        self.trend_export_btn.clicked.connect(self._export_trend)
+        fit_row.addWidget(self.trend_export_btn)
 
         self.export_btn = QtWidgets.QPushButton("Export curves…")
         self.export_btn.setToolTip(
@@ -1404,9 +1415,13 @@ class HdfViewer(QtWidgets.QMainWindow):
         """
         if not self.trend_btn.isChecked():
             self.trend_plot.hide()
+            self._last_trend = []
+            self.trend_export_btn.setEnabled(False)
             return
         first_time = not self.trend_plot.isVisible()
         self.trend_plot.show()
+        self._last_trend = []
+        self.trend_export_btn.setEnabled(False)
         if first_time:
             # A splitter gives a pane its size hint, not its stretch factor,
             # until something drags it; a fresh plot's hint is small enough
@@ -1454,11 +1469,28 @@ class HdfViewer(QtWidgets.QMainWindow):
                 if value is not None:
                     series.setdefault(y_field, []).append((where, float(value)))
 
-        for index, (name, points) in enumerate(sorted(series.items())):
+        drawn = []
+        shared = None
+        for name, points in sorted(series.items()):
             points.sort()
+            axis_values = [p[0] for p in points]
+            if shared is None:
+                shared = np.array(axis_values, dtype=float)
+            # Hand the same array to every series that landed on the same
+            # points, so the export writes one axis column rather than one
+            # per series. Not the same thing as equal values -- a Y field
+            # whose fit was refused on one scan has genuinely fewer points
+            # and keeps an axis column of its own.
+            x_values = (shared if list(shared) == axis_values
+                        else np.array(axis_values, dtype=float))
+            drawn.append((name, x_values, np.array([p[1] for p in points],
+                                                   dtype=float)))
+        self._last_trend = drawn
+        self.trend_export_btn.setEnabled(bool(drawn))
+        for index, (name, x_values, y_values) in enumerate(drawn):
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
             self.trend_item.plot(
-                [p[0] for p in points], [p[1] for p in points], name=name,
+                x_values, y_values, name=name,
                 pen=pg.mkPen(color, width=1), symbol="o", symbolSize=6,
                 symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color))
         self.trend_item.setLabel("bottom", against)
@@ -1469,6 +1501,40 @@ class HdfViewer(QtWidgets.QMainWindow):
             title += f"   [{skipped} with no {against}]"
         self.trend_item.setTitle(title, size="9pt")
         self.trend_item.getViewBox().enableAutoRange()
+
+    def _export_trend(self):
+        """Write the trend's points, with the fit they came from."""
+        if not self._last_trend:
+            QtWidgets.QMessageBox.information(
+                self, "Nothing to export", "The trend plot is empty.")
+            return
+        against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
+        start = str((self._directory or Path(".")) / "trend.csv")
+        name, _filter = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export the trend", start, _export.EXPORT_FILTERS)
+        if not name:
+            return
+        header = [
+            f"trend: {self.trend_y_combo.currentText()} against {against}",
+            f"fit: {self.fit_combo.currentText()}, "
+            f"{self.peaks_spin.value()} peak(s)",
+            f"scans: {', '.join(p.name for p in self._selected_paths())}",
+            f"curve x: {self._x_field()}",
+        ]
+        if self._monitor_field():
+            header.append(f"normalised by: {self._monitor_field()}")
+        try:
+            written = _export.write_columns(
+                name,
+                [("trend", "", _export.table_columns(self._last_trend, against))],
+                description=header,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Export failed", f"{type(exc).__name__}: {exc}")
+            return
+        self.statusBar().showMessage(
+            "Wrote " + ", ".join(str(w) for w in written), 8000)
 
     def _export_curves(self):
         """Write the plotted curves as columns, with their provenance."""
