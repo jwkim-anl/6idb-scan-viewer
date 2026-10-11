@@ -363,6 +363,10 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.hkl_label)
 
+        # Two rows, not one: twelve controls side by side set the window's
+        # minimum width wider than the plot needs. Display on the first,
+        # everything about fitting on the second.
+        fit_row = QtWidgets.QHBoxLayout()
         axis_row = QtWidgets.QHBoxLayout()
         self.axis_label = QtWidgets.QLabel("")
         axis_row.addWidget(self.axis_label, 1)
@@ -385,7 +389,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         # Fitting. "None" rather than a tick, so the shape in use is always
         # legible: a tick plus a shape box would say the same thing twice
         # and could disagree.
-        axis_row.addWidget(QtWidgets.QLabel("Fit"))
+        fit_row.addWidget(QtWidgets.QLabel("Fit"))
         self.fit_combo = QtWidgets.QComboBox()
         self.fit_combo.addItem(FIT_NONE)
         self.fit_combo.addItems(_fit.PEAK_SHAPES)
@@ -394,7 +398,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             "The background is always fitted, never assumed flat."
         )
         self.fit_combo.currentIndexChanged.connect(self._update_plot)
-        axis_row.addWidget(self.fit_combo)
+        fit_row.addWidget(self.fit_combo)
 
         self.peaks_spin = QtWidgets.QSpinBox()
         self.peaks_spin.setRange(1, 4)
@@ -406,7 +410,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             "than failing, so each gets a row of its own to be judged."
         )
         self.peaks_spin.valueChanged.connect(self._update_plot)
-        axis_row.addWidget(self.peaks_spin)
+        fit_row.addWidget(self.peaks_spin)
 
         self.trend_btn = QtWidgets.QPushButton("Trend")
         self.trend_btn.setCheckable(True)
@@ -416,7 +420,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             "Needs a fit, and at least two scans selected."
         )
         self.trend_btn.toggled.connect(self._update_plot)
-        axis_row.addWidget(self.trend_btn)
+        fit_row.addWidget(self.trend_btn)
 
         self.trend_x_combo = QtWidgets.QComboBox()
         self.trend_x_combo.setToolTip(
@@ -426,13 +430,13 @@ class HdfViewer(QtWidgets.QMainWindow):
             "thing somebody deliberately stepped comes out at the top."
         )
         self.trend_x_combo.currentIndexChanged.connect(self._update_plot)
-        axis_row.addWidget(self.trend_x_combo)
+        fit_row.addWidget(self.trend_x_combo)
 
         self.trend_y_combo = QtWidgets.QComboBox()
         self.trend_y_combo.addItems(_trends.TREND_QUANTITIES)
         self.trend_y_combo.setToolTip("Which fitted quantity to follow.")
         self.trend_y_combo.currentIndexChanged.connect(self._update_plot)
-        axis_row.addWidget(self.trend_y_combo)
+        fit_row.addWidget(self.trend_y_combo)
 
         self.export_btn = QtWidgets.QPushButton("Export curves…")
         self.export_btn.setToolTip(
@@ -474,8 +478,10 @@ class HdfViewer(QtWidgets.QMainWindow):
             "as the one summed model."
         )
         self.fit_parts_btn.toggled.connect(self._update_plot)
-        axis_row.addWidget(self.fit_parts_btn)
+        fit_row.addWidget(self.fit_parts_btn)
         layout.addLayout(axis_row)
+        fit_row.addStretch(1)
+        layout.addLayout(fit_row)
 
         canvas_box = QtWidgets.QVBoxLayout()
 
@@ -535,7 +541,29 @@ class HdfViewer(QtWidgets.QMainWindow):
         grid_box.addWidget(self.canvas, 1)
         self.plot_stack.addWidget(grid_page)
 
-        canvas_box.addWidget(self.plot_stack, 1)
+        # The trend is not the same plot drawn differently -- it has one
+        # point per scan where the other has one per point, and its axes
+        # are nothing to do with the curves'. So it sits beside them
+        # rather than taking their place, and you can watch a fit and the
+        # trend it feeds at once. Draggable, because how much room it
+        # wants depends on what is on it.
+        self.trend_plot = pg.PlotWidget(axisItems={
+            "bottom": SparseAxis(orientation="bottom"),
+            "left": SparseAxis(orientation="left"),
+        })
+        self.trend_item = self.trend_plot.getPlotItem()
+        self.trend_item.showGrid(x=True, y=True, alpha=GRID_ALPHA)
+        self.trend_item.addLegend(offset=(-10, 10), labelTextSize="8pt")
+        self.trend_plot.hide()
+
+        plots = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        plots.addWidget(self.plot_stack)
+        plots.addWidget(self.trend_plot)
+        plots.setStretchFactor(0, 3)
+        plots.setStretchFactor(1, 2)
+        plots.setChildrenCollapsible(False)
+        self._plot_splitter = plots
+        canvas_box.addWidget(plots, 1)
         canvas_box.addWidget(self.coord_label)
 
         # Both plots report the pointer to the same label.
@@ -1070,10 +1098,6 @@ class HdfViewer(QtWidgets.QMainWindow):
             self.coord_label.setText("")       # the colour map's last readout
         self.plot_stack.setCurrentIndex(0)
 
-        if self.trend_btn.isChecked():
-            self._draw_trend(paths, x_field, y_fields, monitor_field)
-            return
-
         overlay = len(paths) > 1
         stats_rows: list[tuple[str, dict[str, float | None]]] = []
         curves: list[tuple[str, np.ndarray, np.ndarray]] = []
@@ -1205,6 +1229,7 @@ class HdfViewer(QtWidgets.QMainWindow):
 
         self._last_curves = curves
         self._update_stats_table(stats_rows)
+        self._draw_trend(paths, x_field, y_fields, monitor_field)
 
     def _sync_derivative_view(self):
         """Keep the derivative's view box on top of the main one."""
@@ -1332,20 +1357,38 @@ class HdfViewer(QtWidgets.QMainWindow):
             self._syncing_fields = False
 
     def _draw_trend(self, paths, x_field, y_fields, monitor_field):
-        """One point per scan: a fitted quantity against what was stepped."""
-        self._refresh_trend_axes(paths)
-        shape = self.fit_combo.currentText()
-        if shape == FIT_NONE:
-            self.curve_item.setTitle("Choose a fit shape to trend.")
-            self.stats_table.setRowCount(0)
-            self._last_curves = []
+        """Fill the plot beside the curves: one point per scan.
+
+        Drawn from the same fit the curves carry, so the point on the right
+        is the peak on the left and the two cannot disagree.
+        """
+        if not self.trend_btn.isChecked():
+            self.trend_plot.hide()
             return
+        first_time = not self.trend_plot.isVisible()
+        self.trend_plot.show()
+        if first_time:
+            # A splitter gives a pane its size hint, not its stretch factor,
+            # until something drags it; a fresh plot's hint is small enough
+            # that the trend came up a slot too narrow to read its own axis
+            # labels. Set the split the first time it is shown and leave it
+            # alone after, so a width chosen by hand survives a redraw.
+            width = max(self._plot_splitter.width(), 600)
+            self._plot_splitter.setSizes([int(width * 0.62), int(width * 0.38)])
+        self.trend_item.clear()
+        shape = self.fit_combo.currentText()
+        if shape == FIT_NONE or len(paths) < 2:
+            self.trend_item.setTitle(
+                "Choose a fit shape" if shape == FIT_NONE
+                else "Select two or more scans")
+            return
+        self._refresh_trend_axes(paths)
         against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
         key = _trends.TREND_QUANTITIES[self.trend_y_combo.currentText()]
         axis = _trends.trend_axis(paths, against)
 
         series: dict[str, list[tuple[float, float]]] = {}
-        rows, skipped = [], 0
+        skipped = 0
         for path in paths:
             where = axis.get(str(path))
             data = read_primary(path, sorted({x_field, *y_fields}))
@@ -1355,38 +1398,31 @@ class HdfViewer(QtWidgets.QMainWindow):
                 y = data.get(y_field)
                 if x is None or y is None:
                     continue
-                if monitor is not None:
-                    with np.errstate(divide="ignore", invalid="ignore"):
-                        y = np.where(monitor != 0, y / monitor, np.nan)
                 if where is None:
                     skipped += 1
                     continue
-                got = _fit.peak_fit(x, y, shape)
-                value = got.get(key)
-                if value is None:
-                    continue
-                series.setdefault(y_field, []).append((where, float(value)))
-                rows.append((f"{scan_number(path)}: {y_field}", got))
+                if monitor is not None:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        y = np.where(monitor != 0, y / monitor, np.nan)
+                value = _fit.peak_fit(x, y, shape).get(key)
+                if value is not None:
+                    series.setdefault(y_field, []).append((where, float(value)))
 
-        self._clear_curves()
         for index, (name, points) in enumerate(sorted(series.items())):
             points.sort()
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
-            self.curve_item.plot(
+            self.trend_item.plot(
                 [p[0] for p in points], [p[1] for p in points], name=name,
                 pen=pg.mkPen(color, width=1), symbol="o", symbolSize=6,
                 symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color))
-        self.curve_item.setLabel("bottom", against)
-        self.curve_item.setLabel("left", self.trend_y_combo.currentText())
-        title = f"{sum(len(v) for v in series.values())} fitted point(s)"
+        self.trend_item.setLabel("bottom", against)
+        self.trend_item.setLabel("left", self.trend_y_combo.currentText())
+        fitted = sum(len(v) for v in series.values())
+        title = f"{fitted} fitted point(s) of {len(paths) * len(y_fields)}"
         if skipped:
-            title += f"   [{skipped} scan(s) have no {against}]"
-        self.curve_item.setTitle(title)
-        self.curve_vb.enableAutoRange(); self.curve_vb.updateAutoRange()
-        self._last_curves = [
-            (name, np.array([p[0] for p in pts]), np.array([p[1] for p in pts]))
-            for name, pts in sorted(series.items())]
-        self._update_stats_table(rows)
+            title += f"   [{skipped} with no {against}]"
+        self.trend_item.setTitle(title, size="9pt")
+        self.trend_item.getViewBox().enableAutoRange()
 
     def _export_curves(self):
         """Write the plotted curves as columns, with their provenance."""
