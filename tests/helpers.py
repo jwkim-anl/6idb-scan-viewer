@@ -124,7 +124,8 @@ def write_master(
         motor_yaml = "!!python/tuple\n" + "".join(f"- {m}\n" for m in motors)
         meta.create_dataset("motors", data=np.bytes_(motor_yaml))
         meta.create_dataset("detectors", data=np.bytes_("- lambda250k\n"))
-        meta.create_dataset("hints", data=np.bytes_(HINTS))
+        if "hints" not in (metadata or {}):
+            meta.create_dataset("hints", data=np.bytes_(HINTS))
         for name, value in (metadata or {}).items():
             meta.create_dataset(name, data=np.bytes_(value))
     return path

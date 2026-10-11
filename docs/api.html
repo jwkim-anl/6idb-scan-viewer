@@ -102,7 +102,7 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 120 callables, 10 classes across
+    Version 0.1.0.dev0 · 122 callables, 10 classes across
     12 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
@@ -126,7 +126,7 @@
 <li><a class="m" href="#da6idb-hkl-slice">da6idb.hkl.slice</a><div class="sub"><a class="n" href="#da6idb-hkl-slice-plane-basis">plane_basis</a><a class="n" href="#da6idb-hkl-slice-plane-origin">plane_origin</a><a class="n" href="#da6idb-hkl-slice-slab-offsets">slab_offsets</a><a class="n" href="#da6idb-hkl-slice-sample-volume">sample_volume</a><a class="n" href="#da6idb-hkl-slice-average-along-normal">average_along_normal</a><a class="n" href="#da6idb-hkl-slice-line-cut">line_cut</a><a class="n" href="#da6idb-hkl-slice-sample-plane">sample_plane</a></div></li>
 <li><a class="m" href="#da6idb-images">da6idb.images</a><div class="sub"><a class="n" href="#da6idb-images-nearest-index">nearest_index</a><a class="n" href="#da6idb-images-evenly-spaced-index">evenly_spaced_index</a><a class="n" href="#da6idb-images-read-scan-channels">read_scan_channels</a><a class="n" href="#da6idb-images-ImageData">ImageData</a></div></li>
 <li><a class="m" href="#da6idb-rois">da6idb.rois</a><div class="sub"><a class="n" href="#da6idb-rois-Rect">Rect</a><a class="n" href="#da6idb-rois-reduce-frame">reduce_frame</a><a class="n" href="#da6idb-rois-empty-series">empty_series</a><a class="n" href="#da6idb-rois-sub-frames">sub_frames</a><a class="n" href="#da6idb-rois-series">series</a></div></li>
-<li><a class="m" href="#da6idb-scan">da6idb.scan</a><div class="sub"><a class="n" href="#da6idb-scan-stream-fields">stream_fields</a><a class="n" href="#da6idb-scan-read-primary">read_primary</a><a class="n" href="#da6idb-scan-read-baseline">read_baseline</a><a class="n" href="#da6idb-scan-read-scan-info">read_scan_info</a><a class="n" href="#da6idb-scan-describe-fields">describe_fields</a><a class="n" href="#da6idb-scan-default-x-field">default_x_field</a><a class="n" href="#da6idb-scan-scan-x-field">scan_x_field</a><a class="n" href="#da6idb-scan-scan-hkl">scan_hkl</a><a class="n" href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><a class="n" href="#da6idb-scan-read-grid">read_grid</a><a class="n" href="#da6idb-scan-axis-edges">axis_edges</a><a class="n" href="#da6idb-scan-curve-stats">curve_stats</a><a class="n" href="#da6idb-scan-grid-stats">grid_stats</a></div></li>
+<li><a class="m" href="#da6idb-scan">da6idb.scan</a><div class="sub"><a class="n" href="#da6idb-scan-resolve-hint-field">resolve_hint_field</a><a class="n" href="#da6idb-scan-scan-y-fields">scan_y_fields</a><a class="n" href="#da6idb-scan-stream-fields">stream_fields</a><a class="n" href="#da6idb-scan-read-primary">read_primary</a><a class="n" href="#da6idb-scan-read-baseline">read_baseline</a><a class="n" href="#da6idb-scan-read-scan-info">read_scan_info</a><a class="n" href="#da6idb-scan-describe-fields">describe_fields</a><a class="n" href="#da6idb-scan-default-x-field">default_x_field</a><a class="n" href="#da6idb-scan-scan-x-field">scan_x_field</a><a class="n" href="#da6idb-scan-scan-hkl">scan_hkl</a><a class="n" href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><a class="n" href="#da6idb-scan-read-grid">read_grid</a><a class="n" href="#da6idb-scan-axis-edges">axis_edges</a><a class="n" href="#da6idb-scan-curve-stats">curve_stats</a><a class="n" href="#da6idb-scan-grid-stats">grid_stats</a></div></li>
 <li><a class="m" href="#da6idb-session">da6idb.session</a><div class="sub"><a class="n" href="#da6idb-session-open-folder">open_folder</a><a class="n" href="#da6idb-session-open-scan">open_scan</a><a class="n" href="#da6idb-session-ScanSet">ScanSet</a><a class="n" href="#da6idb-session-Scan">Scan</a><a class="n" href="#da6idb-session-Images">Images</a><a class="n" href="#da6idb-session-HklMap">HklMap</a></div></li>
   </ul></nav>
   <main>
@@ -589,6 +589,17 @@
       <h2><a href="#da6idb-scan">da6idb.scan</a></h2>
       <p class="lead">Reading a master file: its metadata, its streams and the numbers in them.</p>
       
+      <article class="entry" id="da6idb-scan-resolve-hint-field" data-name="resolve_hint_field the recorded field a hinted name stands for, or none for none.">
+        <h3><a href="#da6idb-scan-resolve-hint-field">resolve_hint_field</a><span class="sig">(name, fields)</span></h3>
+        <div class="doc"><p>The recorded field a hinted name stands for, or None for none.</p>
+<p>A motor is hinted under its own name but may only have been written as a setpoint, so the readback is preferred and the setpoint accepted after it.</p>
+<p><code>time</code> is Bluesky&#x27;s pseudo-axis for a plan that moved nothing. That resolves to <code>INDEX_FIELD</code> rather than <code>EPOCH_FIELD</code>: EPOCH is absolute seconds, so a count scan plotted against it gets an axis reading 1790516140 to 1790516890 where the index reads 0 to 599. EPOCH is one tick away for a scan whose dwell actually varied.</p></div>
+      </article>
+      <article class="entry" id="da6idb-scan-scan-y-fields" data-name="scan_y_fields the detectors the scan itself nominates to plot, from its ``hints``.">
+        <h3><a href="#da6idb-scan-scan-y-fields">scan_y_fields</a><span class="sig">(path, fields)</span></h3>
+        <div class="doc"><p>The detectors the scan itself nominates to plot, from its <code>hints</code>.</p>
+<p>The hints name the one signal per detector worth looking at -- <code>lambda250k_stats3_total</code> out of that detector&#x27;s half-dozen columns -- so a scan can open on what it was run to measure instead of on nothing. Empty when the scan hints at nothing, or at fields it did not record.</p></div>
+      </article>
       <article class="entry" id="da6idb-scan-stream-fields" data-name="stream_fields field names under *stream* that carry a ``value`` dataset.">
         <h3><a href="#da6idb-scan-stream-fields">stream_fields</a><span class="sig">(path, stream)</span></h3>
         <div class="doc"><p>Field names under <em>stream</em> that carry a <code>value</code> dataset.</p>
@@ -619,10 +630,10 @@
         <div class="doc"><p>The last field, skipping trailing time-like ones (e.g. <code>scaler_time</code>).</p>
 <p>Only a fallback: <code>scan_x_field</code> asks the scan what it moved.</p></div>
       </article>
-      <article class="entry" id="da6idb-scan-scan-x-field" data-name="scan_x_field the field to plot against: the motor this scan actually moved.">
+      <article class="entry" id="da6idb-scan-scan-x-field" data-name="scan_x_field the field to plot against: the axis this scan actually scanned.">
         <h3><a href="#da6idb-scan-scan-x-field">scan_x_field</a><span class="sig">(path, fields)</span></h3>
-        <div class="doc"><p>The field to plot against: the motor this scan actually moved.</p>
-<p>Taken from the <code>motors</code> metadata rather than guessed from the field ordering, and preferring the motor&#x27;s readback over its setpoint. Returns <code>None</code> when the scan names no motor that was recorded.</p></div>
+        <div class="doc"><p>The field to plot against: the axis this scan actually scanned.</p>
+<p>Taken from the scan&#x27;s own <code>hints</code> -- <code>dimensions</code> names the axis of each scanned dimension -- and failing that from the <code>motors</code> metadata, rather than guessed from the field ordering. The readback is preferred over the setpoint. Returns <code>None</code> when the scan names no axis that was recorded.</p></div>
       </article>
       <article class="entry" id="da6idb-scan-scan-hkl" data-name="scan_hkl mean and spread of psic_h/k/l over the scan, or none if not recorded.">
         <h3><a href="#da6idb-scan-scan-hkl">scan_hkl</a><span class="sig">(path)</span></h3>

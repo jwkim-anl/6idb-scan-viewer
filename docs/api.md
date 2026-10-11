@@ -163,13 +163,15 @@ Rectangles on the detector, and what they reduce each frame to.
 
 Reading a master file: its metadata, its streams and the numbers in them.
 
+- `resolve_hint_field(name, fields)` — The recorded field a hinted name stands for, or None for none.
+- `scan_y_fields(path, fields)` — The detectors the scan itself nominates to plot, from its ``hints``.
 - `stream_fields(path, stream)` — Field names under *stream* that carry a ``value`` dataset.
 - `read_primary(path, fields)` — Read the ``value`` array of each of *fields* from the primary stream.
 - `read_baseline(path)` — Return ``{field: (before, after)}`` from the baseline stream.
 - `read_scan_info(path)` — What the scan was: plan, points, motors and the range they covered.
 - `describe_fields(path, stream='primary')` — Every field in *stream*, with what it is and the range it covered.
 - `default_x_field(fields)` — The last field, skipping trailing time-like ones (e.g. ``scaler_time``).
-- `scan_x_field(path, fields)` — The field to plot against: the motor this scan actually moved.
+- `scan_x_field(path, fields)` — The field to plot against: the axis this scan actually scanned.
 - `scan_hkl(path)` — Mean and spread of psic_h/k/l over the scan, or None if not recorded.
 - `format_scan_hkl(values, decimals=4)` — ``H 1.0135 K -0.4926 ± 0.0386 L 7.4840`` for one scan.
 - `read_grid(path, value_field, monitor_field='')` — *value_field* laid out over a two-motor grid scan, or ``None``.
@@ -219,4 +221,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 120 callables, 10 classes -->
+<!-- 122 callables, 10 classes -->

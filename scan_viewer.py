@@ -70,6 +70,7 @@ from da6idb.scan import (
     axis_edges,
     curve_stats,
     default_x_field,
+    scan_y_fields,
     format_scan_hkl,
     grid_stats,
     read_baseline,
@@ -205,6 +206,8 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._last_mode = ""
         self._x_is_auto = True
         self._manual_x = ""
+        # Y follows the scan's own hints until someone ticks a box.
+        self._y_is_auto = True
         self._last_x_field: str | None = None
         self._last_monitor_field: str | None = None
 
@@ -495,6 +498,8 @@ class HdfViewer(QtWidgets.QMainWindow):
         # so this is the one place automatic choice resumes.
         self._x_is_auto = True
         self._manual_x = ""
+        # Y follows the scan's own hints until someone ticks a box.
+        self._y_is_auto = True
         self.dir_label.setText(str(directory))
         self._settings.setValue("last_directory", str(directory))
         self._reload_file_list()
@@ -609,12 +614,16 @@ class HdfViewer(QtWidgets.QMainWindow):
                     primary_fields.append(name)
                     seen.add(name)
 
-        # The scan that leads the selection decides the default X.
+        # The scan that leads the selection decides the defaults.
         preferred_x = (
             scan_x_field(paths[0], primary_fields)
             or default_x_field(primary_fields)
             or ""
         )
+        # The plan nominates one signal per detector -- the one worth looking
+        # at out of a detector's half-dozen columns -- so open on that rather
+        # than on an empty plot.
+        preferred_y = scan_y_fields(paths[0], primary_fields)
 
         if primary_fields == self._fields:
             # Same fields as before, so the ticks stand -- but a different scan
@@ -622,12 +631,15 @@ class HdfViewer(QtWidgets.QMainWindow):
             # it to that scan's own motor.
             if self._x_is_auto and preferred_x and preferred_x != self._x_field():
                 self._set_x_field(preferred_x)
+            if self._y_is_auto and preferred_y != self._checked_y_fields():
+                self._set_y_fields(preferred_y)
             return
         self._fields = primary_fields
 
         # Carry the current choices over to the new field set.
         current_x = self._manual_x if not self._x_is_auto else self._x_field()
-        current_y = set(self._checked_y_fields())
+        current_y = set(preferred_y if self._y_is_auto
+                        else self._checked_y_fields())
         current_norm = self._monitor_field()
         if self._x_is_auto or current_x not in primary_fields:
             current_x = preferred_x
@@ -643,7 +655,6 @@ class HdfViewer(QtWidgets.QMainWindow):
                 self.field_table.setItem(row, 0, label)
                 states = (
                     (FIELD_X, name == current_x),
-                    # No Y field is checked by default -- the user picks what to plot.
                     (FIELD_Y, name in current_y),
                     (FIELD_NORM, name == current_norm),
                 )
@@ -698,6 +709,24 @@ class HdfViewer(QtWidgets.QMainWindow):
     def _checked_y_fields(self) -> list[str]:
         return self._checked_in_column(FIELD_Y)
 
+    def _set_y_fields(self, names: list[str]):
+        """Tick exactly *names* in the Y column, leaving the rest alone."""
+        wanted = set(names)
+        self._syncing_fields = True
+        try:
+            for row in range(self.field_table.rowCount()):
+                label = self.field_table.item(row, 0)
+                tick = self.field_table.item(row, FIELD_Y)
+                if label is None or tick is None:
+                    continue
+                tick.setCheckState(
+                    QtCore.Qt.Checked if label.text() in wanted
+                    else QtCore.Qt.Unchecked
+                )
+        finally:
+            self._syncing_fields = False
+        self._update_plot()
+
     def _monitor_field(self) -> str:
         """The normalization field, or ``""`` for none."""
         names = self._checked_in_column(FIELD_NORM)
@@ -715,6 +744,10 @@ class HdfViewer(QtWidgets.QMainWindow):
             chosen = item.checkState() == QtCore.Qt.Checked and label is not None
             self._manual_x = label.text() if chosen else ""
             self._x_is_auto = not chosen
+        if column == FIELD_Y:
+            # Any hand-picked Y stops the hints overriding it; clearing them
+            # all hands the choice back to the scan.
+            self._y_is_auto = not self._checked_y_fields()
         # X and Norm are single-choice: ticking one clears whatever held it.
         if column in (FIELD_X, FIELD_NORM) and item.checkState() == QtCore.Qt.Checked:
             self._syncing_fields = True

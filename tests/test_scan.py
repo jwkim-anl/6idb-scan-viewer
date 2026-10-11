@@ -138,3 +138,69 @@ def test_yaml_block_takes_one_section_of_the_hints():
         "a_total", "Ion Chamber 4"]
     # without the split, every list item in the blob would come back at once
     assert len(sv._yaml_items(text)) > 2
+
+
+def test_resolve_hint_field_finds_what_was_actually_recorded():
+    fields = ["psic_eta", "psic_chi_user_setpoint", "det_total", "EPOCH", "INDEX"]
+    assert sv.resolve_hint_field("psic_eta", fields) == "psic_eta"
+    # hinted under its own name, recorded only as a setpoint
+    assert sv.resolve_hint_field("psic_chi", fields) == "psic_chi_user_setpoint"
+    assert sv.resolve_hint_field("nobody", fields) is None
+    assert sv.resolve_hint_field("", fields) is None
+    # the pseudo-axis of a plan that moved nothing: the index, not the clock
+    assert sv.resolve_hint_field("time", fields) == "INDEX"
+    assert sv.resolve_hint_field("time", ["EPOCH"]) == "EPOCH"
+    assert sv.resolve_hint_field("time", ["det_total"]) is None
+
+
+def test_hint_dimensions_reads_the_nested_tuples():
+    text = ("detectors:\n- a_total\n"
+            "dimensions:\n"
+            "- !!python/tuple\n  - - bmag_sx\n    - bmag_sy\n  - primary\n"
+            "- !!python/tuple\n  - - psic_chi\n  - primary\n"
+            "monitor: Time\n")
+    assert sv._hint_dimensions(text) == ["bmag_sx", "bmag_sy", "psic_chi"]
+    # a plan that moved nothing writes an empty list, which is not an axis
+    nothing = "dimensions:\n- !!python/tuple\n  - []\n  - primary\n"
+    assert sv._hint_dimensions(nothing) == []
+    assert sv._hint_dimensions("detectors:\n- a_total\n") == []
+
+
+def test_scan_y_fields_come_from_the_plans_own_hints():
+    hints = ("detectors:\n- lambda250k_stats1_total\n- Ion_Chamber_1\n"
+             "- never_recorded\ndimensions:\n- !!python/tuple\n"
+             "  - - psic_eta\n  - primary\n")
+    with Sandbox() as d:
+        path = write_master(d / "s_00007_master.hdf", points=5,
+                            metadata={"hints": hints})
+        fields = sv.stream_fields(path, "primary")
+        info = sv.read_scan_info(path)
+        assert info["hints"]["dimensions"] == ["psic_eta"]
+        assert "never_recorded" in info["hints"]["detectors"]
+        # only the ones the file actually holds come back, in hint order
+        assert sv.scan_y_fields(path, fields) == [
+            "lambda250k_stats1_total", "Ion_Chamber_1"]
+        # and the axis comes from the dimensions hint
+        assert sv.scan_x_field(path, fields) == "psic_eta"
+
+
+def test_a_scan_that_hints_at_nothing_nominates_nothing():
+    with Sandbox() as d:
+        path = write_master(d / "s_00007_master.hdf", points=5,
+                            metadata={"hints": "monitor: Time\n"})
+        fields = sv.stream_fields(path, "primary")
+        assert sv.scan_y_fields(path, fields) == []
+        assert sv.read_scan_info(path)["hints"] == {"dimensions": [],
+                                                    "detectors": []}
+        # with no hints the motors metadata still names the axis
+        assert sv.scan_x_field(path, fields) == "psic_eta"
+
+
+def test_the_example_scans_nominate_their_own_signals():
+    if not have_example():
+        return
+    fields = sv.stream_fields(EXAMPLE_MASTER, "primary")
+    check("scan/example_hints", {
+        "x": sv.scan_x_field(EXAMPLE_MASTER, fields),
+        "y": sv.scan_y_fields(EXAMPLE_MASTER, fields),
+    })

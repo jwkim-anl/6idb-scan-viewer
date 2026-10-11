@@ -45,6 +45,41 @@ def _yaml_items(text: str) -> list[str]:
     ]
 
 
+def _hint_dimensions(text: str) -> list[str]:
+    """The axes the ``dimensions`` hint names, outermost first.
+
+    Bluesky hints one ``(fields, stream)`` tuple per scanned dimension, which
+    PyYAML writes two or three levels deep with ``!!python/tuple`` tags::
+
+        dimensions:
+        - !!python/tuple
+          - - psic_eta
+          - primary
+
+    Only the field names are wanted, so the trailing stream name -- the last
+    leaf of each tuple -- is dropped. A plan that moved nothing writes an
+    empty list there, which is not an axis and is left out.
+    """
+    groups: list[list[str]] = []
+    collecting = False
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not collecting:
+            collecting = line.rstrip() == "dimensions:"
+            continue
+        if line.startswith("- "):
+            groups.append([])               # one more (fields, stream) tuple
+        elif not line[:1].isspace():
+            break                           # a new top-level key ends the block
+        item = line.strip()
+        while item.startswith("- "):
+            item = item[2:].strip()
+        if item and not item.startswith("!!") and groups:
+            groups[-1].append(item.strip("'\""))
+    return [name for group in groups for name in group[:-1] if name != "[]"]
+
+
 def _yaml_block(text: str, key: str) -> str:
     """The body under ``key:`` in a simple YAML mapping, as text.
 
@@ -117,6 +152,48 @@ _SCAN_INFO_CACHE: dict[tuple, dict] = {}
 
 def _is_time_like(name: str) -> bool:
     return "time" in name.lower() or name == EPOCH_FIELD
+
+def resolve_hint_field(name: str, fields: list[str]) -> str | None:
+    """The recorded field a hinted name stands for, or None for none.
+
+    A motor is hinted under its own name but may only have been written as a
+    setpoint, so the readback is preferred and the setpoint accepted after
+    it.
+
+    ``time`` is Bluesky's pseudo-axis for a plan that moved nothing. That
+    resolves to :data:`INDEX_FIELD` rather than :data:`EPOCH_FIELD`: EPOCH
+    is absolute seconds, so a count scan plotted against it gets an axis
+    reading 1790516140 to 1790516890 where the index reads 0 to 599. EPOCH
+    is one tick away for a scan whose dwell actually varied.
+    """
+    if not name:
+        return None
+    if name == "time":
+        for pseudo in (INDEX_FIELD, EPOCH_FIELD):
+            if pseudo in fields:
+                return pseudo
+        return None
+    for candidate in (name, f"{name}_user_setpoint", f"{name}_setpoint"):
+        if candidate in fields:
+            return candidate
+    return None
+
+
+def scan_y_fields(path: Path, fields: list[str]) -> list[str]:
+    """The detectors the scan itself nominates to plot, from its ``hints``.
+
+    The hints name the one signal per detector worth looking at --
+    ``lambda250k_stats3_total`` out of that detector's half-dozen columns --
+    so a scan can open on what it was run to measure instead of on nothing.
+    Empty when the scan hints at nothing, or at fields it did not record.
+    """
+    chosen: list[str] = []
+    for name in read_scan_info(path)["hints"]["detectors"]:
+        resolved = resolve_hint_field(name, fields)
+        if resolved is not None and resolved not in chosen:
+            chosen.append(resolved)
+    return chosen
+
 
 def stream_fields(path: Path, stream: str) -> list[str]:
     """Field names under *stream* that carry a ``value`` dataset.
@@ -276,6 +353,9 @@ def read_scan_info(path: Path) -> dict:
         "plan": "",
         "points": "",
         "motors": [],
+        # What the plan itself says is worth plotting: the axis of each
+        # scanned dimension, and one signal per detector.
+        "hints": {"dimensions": [], "detectors": []},
         "shape": [],
         "detectors": [],
         "ranges": [],          # (motor, first, last, n)
@@ -292,6 +372,11 @@ def read_scan_info(path: Path) -> dict:
                 info["plan"] = _meta_text(meta, "plan_name")
                 info["points"] = _meta_text(meta, "num_points")
                 info["motors"] = _yaml_items(_meta_text(meta, "motors"))
+                hints = _meta_text(meta, "hints")
+                info["hints"] = {
+                    "dimensions": _hint_dimensions(hints),
+                    "detectors": _yaml_items(_yaml_block(hints, "detectors")),
+                }
                 # grid_scan records the raster size here; a 1-D plan has none.
                 info["shape"] = [
                     int(n) for n in _yaml_items(_meta_text(meta, "shape"))
@@ -367,14 +452,14 @@ def describe_fields(path: Path, stream: str = "primary") -> list[dict]:
     scanned = set(info.get("motors") or [])
     detectors = list(info.get("detectors") or [])
 
-    hinted: set[str] = set()
+    # The hint names a device's signal; mark whichever field actually
+    # carries it, which for a motor may be the setpoint.
+    hinted = {resolve_hint_field(name, names)
+              for name in info["hints"]["detectors"]}
+    hinted.discard(None)
     attrs: dict[str, tuple[str, str, str]] = {}
     try:
         with h5py.File(path, "r") as f:
-            meta = f.get(METADATA_PATH)
-            if meta is not None:
-                hints = _meta_text(meta, "hints")
-                hinted = set(_yaml_items(_yaml_block(hints, "detectors")))
             group = f.get(f"entry/instrument/bluesky/streams/{stream}")
             for name in names:
                 sub = group.get(name) if group is not None else None
@@ -453,16 +538,19 @@ def default_x_field(fields: list[str]) -> str | None:
     return fields[-1] if fields else None
 
 def scan_x_field(path: Path, fields: list[str]) -> str | None:
-    """The field to plot against: the motor this scan actually moved.
+    """The field to plot against: the axis this scan actually scanned.
 
-    Taken from the ``motors`` metadata rather than guessed from the field
-    ordering, and preferring the motor's readback over its setpoint. Returns
-    ``None`` when the scan names no motor that was recorded.
+    Taken from the scan's own ``hints`` -- ``dimensions`` names the axis of
+    each scanned dimension -- and failing that from the ``motors``
+    metadata, rather than guessed from the field ordering. The readback is
+    preferred over the setpoint. Returns ``None`` when the scan names no
+    axis that was recorded.
     """
-    for motor in read_scan_info(path)["motors"]:
-        for candidate in (motor, f"{motor}_user_setpoint", f"{motor}_setpoint"):
-            if candidate in fields:
-                return candidate
+    info = read_scan_info(path)
+    for name in (*info["hints"]["dimensions"], *info["motors"]):
+        resolved = resolve_hint_field(name, fields)
+        if resolved is not None:
+            return resolved
     return None
 
 def scan_hkl(path: Path):
