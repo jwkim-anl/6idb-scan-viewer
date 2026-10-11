@@ -66,6 +66,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
+from da6idb import combine as _combine
 from da6idb import fit as _fit
 from da6idb.scan import (
     axis_edges,
@@ -402,6 +403,18 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.peaks_spin.valueChanged.connect(self._update_plot)
         axis_row.addWidget(self.peaks_spin)
+
+        self.average_btn = QtWidgets.QPushButton("Average repeats")
+        self.average_btn.setCheckable(True)
+        self.average_btn.setToolTip(
+            "Average the scans in the selection that are one measurement\n"
+            "repeated -- same plan, same motors, same sample position and\n"
+            "temperature, same points. Scans that differ in any of those are\n"
+            "left as separate curves, so a series does not quietly average\n"
+            "into one clean curve that is not one measurement."
+        )
+        self.average_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.average_btn)
 
         self.fit_parts_btn = QtWidgets.QPushButton("Parts")
         self.fit_parts_btn.setCheckable(True)
@@ -1031,7 +1044,11 @@ class HdfViewer(QtWidgets.QMainWindow):
                         y = np.where(monitor != 0, y / monitor, np.nan)
                 label = f"{path.name}: {y_field}" if overlay else y_field
                 stats_rows.append((label, curve_stats(x, y)))
-                curves.append((label, x, y))
+                curves.append((label, x, y, path, y_field))
+
+        if self.average_btn.isChecked() and len(paths) > 1:
+            curves, stats_rows = self._average_repeats(curves, paths)
+        curves = [(label, x, y) for label, x, y, *_rest in curves]
 
         shape = self.fit_combo.currentText()
         wanted = self.peaks_spin.value()
@@ -1226,6 +1243,47 @@ class HdfViewer(QtWidgets.QMainWindow):
         for column, text in enumerate(values):
             self.stats_table.setItem(0, column, QtWidgets.QTableWidgetItem(text))
         self.stats_table.resizeColumnsToContents()
+
+    def _average_repeats(self, curves, paths):
+        """Collapse each set of repeats into one curve, per Y field.
+
+        Grouped by what the scans are, not by what their numbers look like
+        -- see :func:`da6idb.combine.scan_groups`. Within a group the
+        points still have to line up: two scans of one thing do not step
+        the same readback twice, so one whose X has drifted more than half
+        a step is left out rather than smeared into the mean.
+        """
+        rank = {str(path): index for index, path in enumerate(paths)}
+        groups = _combine.scan_groups(paths)
+        belongs = {str(path): number
+                   for number, group in enumerate(groups) for path in group}
+
+        pooled: dict[tuple, list] = {}
+        for label, x, y, path, y_field in curves:
+            pooled.setdefault((belongs[str(path)], y_field), []).append(
+                (rank[str(path)], label, x, y, path))
+
+        out, rows = [], []
+        for key in sorted(pooled, key=lambda k: (min(i for i, *_ in pooled[k]), k[1])):
+            members = sorted(pooled[key])
+            first = members[0]
+            if len(members) == 1:
+                _i, label, x, y, _p = first
+                out.append((label, x, y))
+                rows.append((label, curve_stats(x, y)))
+                continue
+            base_x = first[2]
+            kept = [m for m in members if _combine.same_grid(base_x, m[2])]
+            dropped = len(members) - len(kept)
+            rows_n = max(m[2].size for m in kept)
+            mean = _combine.stack_mean([m[3] for m in kept], rows_n)
+            numbers = "+".join(scan_number(m[4]) for m in kept)
+            label = f"{numbers}: {key[1]}"
+            if dropped:
+                label += f" ({dropped} off-grid left out)"
+            out.append((label, base_x[:rows_n], mean))
+            rows.append((label, curve_stats(base_x[:rows_n], mean)))
+        return out, rows
 
     def _update_stats_table(self, rows: list[tuple[str, dict[str, float | None]]]):
         def fmt(value: float | None) -> str:

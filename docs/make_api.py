@@ -89,6 +89,7 @@ pyvista.
 | `da6idb.files` | finding a scan's files and pairing master with detector |
 | `da6idb.scan` | the master: metadata, streams, rasters, peak statistics |
 | `da6idb.fit` | peak shapes fitted to a curve, one or several |
+| `da6idb.combine` | which scans are repeats, and averaging them |
 | `da6idb.images` | the detector stack, its channels and its stored ROIs |
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |

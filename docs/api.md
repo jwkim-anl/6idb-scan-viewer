@@ -14,6 +14,7 @@ pyvista.
 | `da6idb.files` | finding a scan's files and pairing master with detector |
 | `da6idb.scan` | the master: metadata, streams, rasters, peak statistics |
 | `da6idb.fit` | peak shapes fitted to a curve, one or several |
+| `da6idb.combine` | which scans are repeats, and averaging them |
 | `da6idb.images` | the detector stack, its channels and its stored ROIs |
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |
@@ -33,6 +34,21 @@ Gridding a run of scans onto one common lattice.
 - `parse_scans(text)` — Scan numbers from what someone typed: "152, 154 157-160".
 - `find_scans(folder)` — ``{scan number: image path}`` for the pva files in *folder*.
 - `grid_scans(folder, numbers, hkl_range=None, oversample=1.0, output=None, step=None, reuse=True, normalize_transmission=True, on_start=None, on_geometry=None, on_done=None, progress=None)` — Grid several scans onto one lattice. Returns ``[(number, path, note)]``.
+
+### `da6idb.combine`
+
+Telling repeats of one measurement apart, and putting them together.
+
+- `baseline_values(path, fields)` — The baseline's own reading of each of *fields* that it carries.
+- `collect_uniques(values, atol)` — The distinct settings in *values*, counting any two within *atol* as one.
+- `scan_signature(path)` — What a scan has to share with another before it can be a repeat of it.
+- `sample_atol(name)` — How far *name* may move with the sample still counting as unmoved.
+- `scan_groups(paths)` — Gather the selection into the sets that are one measurement repeated.
+- `curve_step(x)` — The typical distance between one point of *x* and the next.
+- `same_grid(x_a, x_b)` — Whether two scans measured the same points, to within half a step.
+- `stack_mean(pieces, rows)` — The mean of *pieces* row by row over *rows*, counting only the finite.
+- `combine_curves(x_a, y_a, x_b, y_b, subtract)` — ``A + B``, or ``A - B``, with B read onto A's X by interpolation.
+- `combine_name(first, second, subtract)` — How a combination reads, in the menus and on the plot alike.
 
 ### `da6idb.export`
 
@@ -232,4 +248,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 127 callables, 10 classes -->
+<!-- 137 callables, 10 classes -->

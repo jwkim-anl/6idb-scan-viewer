@@ -102,8 +102,8 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 127 callables, 10 classes across
-    13 modules · generated from the source on 2026-10-11 by
+    Version 0.1.0.dev0 · 137 callables, 10 classes across
+    14 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
   <p class="meta">
@@ -117,6 +117,7 @@
 <div class="layout">
   <nav><ul>
 <li><a class="m" href="#da6idb-batch">da6idb.batch</a><div class="sub"><a class="n" href="#da6idb-batch-expand-scans">expand_scans</a><a class="n" href="#da6idb-batch-parse-scans">parse_scans</a><a class="n" href="#da6idb-batch-find-scans">find_scans</a><a class="n" href="#da6idb-batch-grid-scans">grid_scans</a></div></li>
+<li><a class="m" href="#da6idb-combine">da6idb.combine</a><div class="sub"><a class="n" href="#da6idb-combine-baseline-values">baseline_values</a><a class="n" href="#da6idb-combine-collect-uniques">collect_uniques</a><a class="n" href="#da6idb-combine-scan-signature">scan_signature</a><a class="n" href="#da6idb-combine-sample-atol">sample_atol</a><a class="n" href="#da6idb-combine-scan-groups">scan_groups</a><a class="n" href="#da6idb-combine-curve-step">curve_step</a><a class="n" href="#da6idb-combine-same-grid">same_grid</a><a class="n" href="#da6idb-combine-stack-mean">stack_mean</a><a class="n" href="#da6idb-combine-combine-curves">combine_curves</a><a class="n" href="#da6idb-combine-combine-name">combine_name</a></div></li>
 <li><a class="m" href="#da6idb-export">da6idb.export</a><div class="sub"><a class="n" href="#da6idb-export-slug">slug</a><a class="n" href="#da6idb-export-suffix-for">suffix_for</a><a class="n" href="#da6idb-export-write-matrix">write_matrix</a><a class="n" href="#da6idb-export-write-columns">write_columns</a><a class="n" href="#da6idb-export-write-dataarray">write_dataarray</a></div></li>
 <li><a class="m" href="#da6idb-files">da6idb.files</a><div class="sub"><a class="n" href="#da6idb-files-detector-files-from-metadata">detector_files_from_metadata</a><a class="n" href="#da6idb-files-image-path-for-master">image_path_for_master</a><a class="n" href="#da6idb-files-master-path-for-image">master_path_for_image</a><a class="n" href="#da6idb-files-read-master-rois">read_master_rois</a><a class="n" href="#da6idb-files-is-image-file">is_image_file</a><a class="n" href="#da6idb-files-resolve-image-file">resolve_image_file</a><a class="n" href="#da6idb-files-scan-number">scan_number</a><a class="n" href="#da6idb-files-file-prefix">file_prefix</a><a class="n" href="#da6idb-files-list-hdf-files">list_hdf_files</a></div></li>
 <li><a class="m" href="#da6idb-fit">da6idb.fit</a><div class="sub"><a class="n" href="#da6idb-fit-peak-fit">peak_fit</a><a class="n" href="#da6idb-fit-fit-columns">fit_columns</a><a class="n" href="#da6idb-fit-peak-fit-multi">peak_fit_multi</a><a class="n" href="#da6idb-fit-peak-model">peak_model</a><a class="n" href="#da6idb-fit-peak-parts">peak_parts</a></div></li>
@@ -153,6 +154,64 @@
         <h3><a href="#da6idb-batch-grid-scans">grid_scans</a><span class="sig">(folder, numbers, hkl_range=None, oversample=1.0, output=None, step=None, reuse=True, normalize_transmission=True, on_start=None, on_geometry=None, on_done=None, progress=None)</span></h3>
         <div class="doc"><p>Grid several scans onto one lattice. Returns <code>[(number, path, note)]</code>.</p>
 <p><code>path</code> is None for a scan that could not be done, and <code>note</code> says why. The cell size comes from the first scan that reads successfully unless <em>step</em> is given outright. With <em>normalize_transmission</em> each scan&#x27;s frames are divided by its attenuator transmission where that varies, which is decided per scan -- a series can mix scans that moved their filter with scans that did not.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-combine">
+      <h2><a href="#da6idb-combine">da6idb.combine</a></h2>
+      <p class="lead">Telling repeats of one measurement apart, and putting them together.</p>
+      
+      <article class="entry" id="da6idb-combine-baseline-values" data-name="baseline_values the baseline&#x27;s own reading of each of *fields* that it carries.">
+        <h3><a href="#da6idb-combine-baseline-values">baseline_values</a><span class="sig">(path, fields)</span></h3>
+        <div class="doc"><p>The baseline&#x27;s own reading of each of <em>fields</em> that it carries.</p>
+<p>Before the scan, not after: where the sample sat while it ran.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-collect-uniques" data-name="collect_uniques the distinct settings in *values*, counting any two within *atol* as one.">
+        <h3><a href="#da6idb-combine-collect-uniques">collect_uniques</a><span class="sig">(values, atol)</span></h3>
+        <div class="doc"><p>The distinct settings in <em>values</em>, counting any two within <em>atol</em> as one.</p>
+<p><code>process_data.collect_uniques</code> verbatim. A readback never repeats exactly, so the settings have to be found by distance; the first value of each cluster is the one kept, which is why the result follows the sorted order rather than the order measured.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-scan-signature" data-name="scan_signature what a scan has to share with another before it can be a repeat of it.">
+        <h3><a href="#da6idb-combine-scan-signature">scan_signature</a><span class="sig">(path)</span></h3>
+        <div class="doc"><p>What a scan has to share with another before it can be a repeat of it.</p>
+<p>The plan and the motors it stepped, taken from the metadata rather than the columns: two scans that moved different things are not repeats of one another however alike their numbers look. <code>None</code> where the scan stepped nothing -- a <code>count</code> has no shape to repeat, and the 32 of them in one directory here would otherwise read as a single measurement taken 32 times, their row counts running from 1 to 600.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-sample-atol" data-name="sample_atol how far *name* may move with the sample still counting as unmoved.">
+        <h3><a href="#da6idb-combine-sample-atol">sample_atol</a><span class="sig">(name)</span></h3>
+        <div class="doc"><p>How far <em>name</em> may move with the sample still counting as unmoved.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-scan-groups" data-name="scan_groups gather the selection into the sets that are one measurement repeated.">
+        <h3><a href="#da6idb-combine-scan-groups">scan_groups</a><span class="sig">(paths)</span></h3>
+        <div class="doc"><p>Gather the selection into the sets that are one measurement repeated.</p>
+<p>Three things have to agree. The plan and the motors, from <code>scan_signature</code>. Where the sample sat and how cold it was, read from the baseline through <code>SAMPLE_STAGES</code> -- which is what tells repeats from a series, 174, 175 and 176 being the same energy scan with the sample stepped 0.2 mm between them. And the points themselves, which only the curves can answer and <code>same_grid</code> settles later.</p>
+<p>Each quantity is clustered across the selection with <code>collect_uniques</code> at its own tolerance and every scan then assigned to the nearest surviving value, so the grouping does not depend on which scan happened to be looked at first. Groups come back in the order their first scan appears, which is the table&#x27;s own order.</p>
+<p>A scan whose baseline carries no whole stage is left on its own rather than pooled on the temperature alone. That is the conservative way round: an endstation nobody has listed here draws its scans separately, which is what the viewer does today, instead of averaging a series into one curve that looks clean and is not one measurement.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-curve-step" data-name="curve_step the typical distance between one point of *x* and the next.">
+        <h3><a href="#da6idb-combine-curve-step">curve_step</a><span class="sig">(x)</span></h3>
+        <div class="doc"><p>The typical distance between one point of <em>x</em> and the next.</p>
+<p>The median rather than the span over the count: a list scan need not step evenly, and one long jump back to the start would make every real step look small beside it. Zero where nothing moved.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-same-grid" data-name="same_grid whether two scans measured the same points, to within half a step.">
+        <h3><a href="#da6idb-combine-same-grid">same_grid</a><span class="sig">(x_a, x_b)</span></h3>
+        <div class="doc"><p>Whether two scans measured the same points, to within half a step.</p>
+<p>Compared row by row over the overlap, so a scan stopped part way is still the same grid as far as it got. The tolerance is a fraction of the scan&#x27;s own step rather than an absolute distance, there being no one figure that suits an energy in keV and an angle in degrees at once; see <code>SAME_X_STEPS</code> for where the half comes from.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-stack-mean" data-name="stack_mean the mean of *pieces* row by row over *rows*, counting only the finite.">
+        <h3><a href="#da6idb-combine-stack-mean">stack_mean</a><span class="sig">(pieces, rows)</span></h3>
+        <div class="doc"><p>The mean of <em>pieces</em> row by row over <em>rows</em>, counting only the finite.</p>
+<p>A measurement stopped part way leaves its last rows short, so a row only some of the pieces reached is the mean of those and a row none of them reached comes back NaN -- never a short piece quietly read as zero. Shared by the repeats within one scan and the repeats across several, which are the same reduction asked for twice.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-combine-curves" data-name="combine_curves ``a + b``, or ``a - b``, with b read onto a&#x27;s x by interpolation.">
+        <h3><a href="#da6idb-combine-combine-curves">combine_curves</a><span class="sig">(x_a, y_a, x_b, y_b, subtract)</span></h3>
+        <div class="doc"><p><code>A + B</code>, or <code>A - B</code>, with B read onto A&#x27;s X by interpolation.</p>
+<p>Two scans of one thing do not step the same points. Scans 171 and 173 are 109 energies each and differ by up to 4e-05 keV -- the readback, sampled at two different moments -- so adding them point by point would be adding readings taken at different energies.</p>
+<p>Only across the overlap. Left to itself <code>interp</code> holds B&#x27;s first and last readings flat right across A, drawing a sum out where there is no second scan at all; <code>left</code> and <code>right</code> make that stretch NaN and the line simply stops. On 171 and 173 that is the first point and the last, 171 starting above 173 and ending below it.</p>
+<p>The sort is what makes this correct rather than merely tidy. <code>interp</code> documents <code>xp</code> as increasing and says nothing whatever when it is not -- and both of those scans run <em>downwards</em> in energy, as does any scan stepped from the top of an edge. Handed 173 as it comes off disk it returns 0 finite points out of 109, so the sum would be a blank curve on exactly the pair this was written for; without the NaN guards it is instead wrong by 64452 on values around 4e5, in silence. An averaged curve&#x27;s X can also carry the NaN pad <code>group_curve</code> leaves, which the same clean removes.</p></div>
+      </article>
+      <article class="entry" id="da6idb-combine-combine-name" data-name="combine_name how a combination reads, in the menus and on the plot alike.">
+        <h3><a href="#da6idb-combine-combine-name">combine_name</a><span class="sig">(first, second, subtract)</span></h3>
+        <div class="doc"><p>How a combination reads, in the menus and on the plot alike.</p></div>
       </article>
     </section>
 
