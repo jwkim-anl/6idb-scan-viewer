@@ -101,6 +101,9 @@ from image_viewer import ImageViewerWindow
 # redraw.
 # Faint: a grid is a reference, not a mesh drawn over the data.
 GRID_ALPHA = 0.25
+# How far apart stacked Y axes sit, in points. Wide enough for six figures
+# and a label without the next one touching it.
+AXIS_SPACING = 54
 
 FIT_NONE = "None"
 AVERAGE_NONE, AVERAGE_REPEATS, AVERAGE_ALL = "None", "Repeats", "All selected"
@@ -432,6 +435,18 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.trend_export_btn.clicked.connect(self._export_trend)
         fit_row.addWidget(self.trend_export_btn)
 
+        self.separate_y_btn = QtWidgets.QPushButton("Separate Y")
+        self.separate_y_btn.setCheckable(True)
+        self.separate_y_btn.setToolTip(
+            "Give every curve its own Y axis, stacked out to the right in\n"
+            "the curve's own colour. For fields whose scales have nothing\n"
+            "to do with each other -- a detector counting in the hundreds\n"
+            "of thousands beside a capacitance of 0.9 -- which on one axis\n"
+            "leaves the smaller one a flat line along the bottom."
+        )
+        self.separate_y_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.separate_y_btn)
+
         self.export_btn = QtWidgets.QPushButton("Export curves…")
         self.export_btn.setToolTip(
             "Write what is plotted as columns: an X and a Y per curve, with\n"
@@ -494,6 +509,9 @@ class HdfViewer(QtWidgets.QMainWindow):
         # dY/dX shares the X axis and wants its own Y scale.
         self.deriv_ax = self.curve_ax.twinx()
         self.deriv_ax.set_visible(False)
+        # Created per redraw when "Separate Y" is on, and removed with the
+        # curves: an axis outlives a clear() where a line does not.
+        self._extra_axes: list = []
         self.curve_toolbar = NavigationToolbar2QT(self.curve_canvas, panel)
 
         self.figure = Figure(figsize=(6, 4))
@@ -1139,13 +1157,35 @@ class HdfViewer(QtWidgets.QMainWindow):
                     rows.append((f"    peak {number}", part))
             stats_rows = rows
 
+        # One axis per curve, or one axis for all of them. The first is
+        # always the left-hand axis; the rest are stacked outwards to the
+        # right, each tinted like the curve it belongs to so there is no
+        # guessing which scale reads which line.
+        separate = self.separate_y_btn.isChecked() and len(curves) > 1
+        axes = [self.curve_ax]
+        if separate:
+            for index in range(1, len(curves)):
+                extra = self.curve_ax.twinx()
+                extra.spines["right"].set_position(
+                    ("outward", AXIS_SPACING * (index - 1)))
+                color = CURVE_COLORS[index % len(CURVE_COLORS)]
+                extra.spines["right"].set_color(color)
+                extra.tick_params(axis="y", colors=color, labelsize=8)
+                extra.yaxis.label.set_color(color)
+                self._extra_axes.append(extra)
+                axes.append(extra)
+        else:
+            axes = [self.curve_ax] * len(curves)
+
         for index, (label, x, y) in enumerate(curves):
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
             # A normalised curve can divide by a zero monitor. matplotlib
             # breaks a line at NaN of its own accord, which is what is
             # wanted: the gap shows rather than being drawn through.
-            self.curve_ax.plot(x, y, label=label, color=color, lw=1,
-                               marker="o", ms=3)
+            axes[index].plot(x, y, label=label, color=color, lw=1,
+                             marker="o", ms=3)
+            if separate:
+                axes[index].set_ylabel(label, fontsize=8)
 
         for index, (got, (label, x, _y)) in enumerate(zip(fits, curves)):
             if got is None:
@@ -1156,25 +1196,40 @@ class HdfViewer(QtWidgets.QMainWindow):
             model = _fit.peak_model(grid, shape, got)
             if model is None:
                 continue
-            self.curve_ax.plot(grid, model, color=color, lw=1.6)
+            # On the curve's own axis, so a fit lies on the data it fitted
+            # rather than wherever the left-hand scale happens to put it.
+            axes[index].plot(grid, model, color=color, lw=1.6)
             if not self.fit_parts_btn.isChecked():
                 continue
             for piece in _fit.peak_parts(grid, shape, got):
-                self.curve_ax.plot(grid, piece, color=color, lw=0.9, ls=":")
+                axes[index].plot(grid, piece, color=color, lw=0.9, ls=":")
 
         self.curve_ax.set_xlabel(x_field)
         ylabel = ", ".join(y_fields)
         if normalize:
             ylabel += f" / {monitor_field}"
-        self.curve_ax.set_ylabel(ylabel)
+        if not separate:
+            self.curve_ax.set_ylabel(ylabel)
         self.curve_ax.grid(True, alpha=GRID_ALPHA)
         if len(curves) > 1:
             # One curve is already named by the Y label; a legend for it
-            # would only cover data.
-            self.curve_ax.legend(fontsize=7, loc="best")
+            # would only cover data. Gathered across the axes, since each
+            # one knows only its own line.
+            handles, labels = [], []
+            for axis in dict.fromkeys(axes):
+                got_h, got_l = axis.get_legend_handles_labels()
+                handles += got_h
+                labels += got_l
+            if handles:
+                self.curve_ax.legend(handles, labels, fontsize=7, loc="best")
 
         show_derivative = self.derivative_btn.isChecked()
         self.deriv_ax.set_visible(show_derivative)
+        # One slot beyond the last separate axis: those occupy slots 0 to
+        # n-1, so the derivative takes slot n rather than landing on top of
+        # the last of them.
+        self.deriv_ax.spines["right"].set_position(
+            ("outward", AXIS_SPACING * len(self._extra_axes)))
         if show_derivative:
             for index, (label, x, y) in enumerate(curves):
                 if x.size < 2:
@@ -1217,9 +1272,16 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._draw_trend(paths, x_field, y_fields, monitor_field)
 
     def _clear_curves(self):
-        """Empty the curve page, legend and derivative overlay alike."""
+        """Empty the curve page, legend and every extra Y axis alike."""
+        for extra in self._extra_axes:
+            extra.remove()
+        self._extra_axes = []
         self.curve_ax.clear()
         self.deriv_ax.clear()
+        # clear() resets a twin to a left-hand axis, which put the dY/dX
+        # label back over the left one's. twinx() only sets this at birth.
+        self.deriv_ax.yaxis.set_label_position("right")
+        self.deriv_ax.yaxis.tick_right()
         self.deriv_ax.set_visible(False)
 
     def _plot_grid(self, paths, grid, value_field, monitor_field, prev_xlim, prev_ylim):
