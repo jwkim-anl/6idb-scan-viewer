@@ -350,9 +350,15 @@ class HdfViewer(QtWidgets.QMainWindow):
         # minimum width wider than the plot needs. Display on the first,
         # everything about fitting on the second.
         fit_row = QtWidgets.QHBoxLayout()
-        axis_row = QtWidgets.QHBoxLayout()
+        # On a line of its own above the buttons, with the full width to
+        # itself: sharing the row cost the buttons space and still elided
+        # the Y list as soon as more than a couple of fields were ticked.
         self.axis_label = QtWidgets.QLabel("")
-        axis_row.addWidget(self.axis_label, 1)
+        self.axis_label.setWordWrap(True)
+        self.axis_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(self.axis_label)
+
+        axis_row = QtWidgets.QHBoxLayout()
         self.grid_btn = QtWidgets.QPushButton("2D map")
         self.grid_btn.setCheckable(True)
         self.grid_btn.setChecked(True)
@@ -491,6 +497,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.fit_parts_btn.toggled.connect(self._update_plot)
         fit_row.addWidget(self.fit_parts_btn)
+        axis_row.addStretch(1)
         layout.addLayout(axis_row)
         fit_row.addStretch(1)
         layout.addLayout(fit_row)
