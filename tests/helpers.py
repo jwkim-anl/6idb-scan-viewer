@@ -29,8 +29,21 @@ ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = Path(__file__).resolve().parent / "golden"
 
 # The one pair that travels with the repository.
-EXAMPLE_MASTER = ROOT / "tise2_2_00152_master.hdf"
-EXAMPLE_IMAGE = ROOT / "pva_tise2_2_00152.h5"
+def _example(name: str) -> Path:
+    """The example scan, wherever it is kept.
+
+    Beside the code or under ``data/``: the tests that use it guard on
+    :func:`have_example`, so a wrong guess here does not fail them -- it
+    quietly turns a dozen of them into no-ops, which is worse.
+    """
+    for folder in (ROOT, ROOT / "data"):
+        if (folder / name).is_file():
+            return folder / name
+    return ROOT / name
+
+
+EXAMPLE_MASTER = _example("tise2_2_00152_master.hdf")
+EXAMPLE_IMAGE = _example("pva_tise2_2_00152.h5")
 
 PRIMARY = "entry/instrument/bluesky/streams/primary"
 BASELINE = "entry/instrument/bluesky/streams/baseline"

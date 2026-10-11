@@ -104,6 +104,10 @@ GRID_ALPHA = 0.25
 # How far apart stacked Y axes sit, in points. Wide enough for six figures
 # and a label without the next one touching it.
 AXIS_SPACING = 54
+# How many fits to remember. One curve of one scan under one set of fit
+# settings is one entry, so a selection of twenty scans with a couple of
+# fields ticked fits inside this several times over.
+FIT_CACHE_MAX = 512
 
 FIT_NONE = "None"
 AVERAGE_NONE, AVERAGE_REPEATS, AVERAGE_ALL = "None", "Repeats", "All selected"
@@ -197,6 +201,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._colorbar = None
         self._last_curves: list = []
         self._last_trend: list = []
+        self._fit_cache: dict = {}
         self._last_mode = ""
         self._x_is_auto = True
         self._manual_x = ""
@@ -1153,9 +1158,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         if shape != FIT_NONE:
             rows: list[tuple[str, dict]] = []
             for (label, x, y), (_label, stats) in zip(curves, stats_rows):
-                got = (_fit.peak_fit(x, y, shape, stats.get("fwhm"))
-                       if wanted == 1 else
-                       _fit.peak_fit_multi(x, y, shape, wanted))
+                got = self._fitted(x, y, shape, wanted, stats.get("fwhm"))
                 fits.append(got)
                 rows.append((label, {**stats, **got}))
                 # A component has no curve of its own, so its row carries
@@ -1389,6 +1392,38 @@ class HdfViewer(QtWidgets.QMainWindow):
         finally:
             del blocked
 
+    def _fitted(self, x, y, shape, peaks, fwhm_seed=None):
+        """The fit of this curve under these settings, computed once.
+
+        Nothing the trend controls changes a fit. Which number it plots and
+        which axis it plots against are both read out of a fit already made
+        -- but each goes through a full redraw, and that refitted every
+        selected scan twice over, once for the curves and once for the
+        trend. Twenty-one scans under a three-peak pseudo-Voigt took 16.5 s
+        to change the plotted quantity; cached it is immediate.
+
+        Keyed on the numbers themselves rather than on the scan, so an
+        averaged curve, a normalised one and the raw one are three
+        different entries, and editing nothing cannot return a stale fit.
+        The seed is not part of the key because it is derived from the same
+        two arrays: it is passed in only to save recomputing it where the
+        caller has it already.
+        """
+        key = (shape, int(peaks), x.tobytes(), y.tobytes())
+        got = self._fit_cache.get(key)
+        if got is not None:
+            return got
+        if int(peaks) == 1:
+            if fwhm_seed is None:
+                fwhm_seed = curve_stats(x, y).get("fwhm")
+            got = _fit.peak_fit(x, y, shape, fwhm_seed)
+        else:
+            got = _fit.peak_fit_multi(x, y, shape, int(peaks))
+        if len(self._fit_cache) >= FIT_CACHE_MAX:
+            self._fit_cache.clear()
+        self._fit_cache[key] = got
+        return got
+
     def _refresh_trend_quantities(self):
         """Offer each component's numbers once there is more than one."""
         shape = self.fit_combo.currentText()
@@ -1466,7 +1501,12 @@ class HdfViewer(QtWidgets.QMainWindow):
         skipped = 0
         for path in paths:
             where = axis.get(str(path))
-            data = read_primary(path, sorted({x_field, *y_fields}))
+            # The monitor has to be asked for, or normalising is quietly
+            # dropped here while the curves and the table apply it, and the
+            # point on the trend stops being the peak in the table.
+            needed = {x_field, *y_fields} | ({monitor_field} if monitor_field
+                                             else set())
+            data = read_primary(path, sorted(needed))
             x = data.get(x_field)
             monitor = data.get(monitor_field) if monitor_field else None
             for y_field in y_fields:
@@ -1479,8 +1519,10 @@ class HdfViewer(QtWidgets.QMainWindow):
                 if monitor is not None:
                     with np.errstate(divide="ignore", invalid="ignore"):
                         y = np.where(monitor != 0, y / monitor, np.nan)
-                got = (_fit.peak_fit(x, y, shape) if wanted == 1
-                       else _fit.peak_fit_multi(x, y, shape, wanted))
+                # Through the same door as the curves above, so the point
+                # on the trend is the fit in the table and not a second
+                # one that happened to be seeded differently.
+                got = self._fitted(x, y, shape, wanted)
                 value = _trends.trend_value(got, choice)
                 if value is not None:
                     series.setdefault(y_field, []).append((where, float(value)))
