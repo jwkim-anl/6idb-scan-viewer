@@ -458,6 +458,71 @@ def ensure_grid(
     return load_vti(path), path, True
 
 
+# About 800 MB of float32, or two full-resolution rocking curves.
+MAX_CACHED_CELLS = 200_000_000
+
+
+class LoadedGrids:
+    """A few gridded maps held in memory, keyed by the file they came from.
+
+    Reading a ``.vti`` back is about a second for a full-resolution map, and
+    that is the whole cost of flipping between files in a viewer or sweeping
+    planes through one. What is held is keyed by how the file looked when it
+    was read -- path, modification time and size -- so a regrid from
+    somewhere else is noticed rather than served stale.
+
+    The budget is in cells, not files: a folder of small maps keeps many of
+    them, a folder of large ones keeps few. The most recently used is never
+    dropped, however large, since it is the one on screen.
+
+    What is stored is opaque. A caller that must keep something alongside
+    the grid -- the measured range from :func:`make_drawable`, which cannot
+    be recomputed once the NaN has gone -- stores the pair.
+    """
+
+    def __init__(self, max_cells: int = MAX_CACHED_CELLS):
+        self.max_cells = int(max_cells)
+        self._items: list = []        # [(key, value, cells)], oldest first
+
+    @staticmethod
+    def stamp(path):
+        """What says a file on disk is still the one that was read."""
+        try:
+            info = Path(path).stat()
+        except OSError:
+            return None
+        return (str(Path(path).resolve()), info.st_mtime_ns, info.st_size)
+
+    def get(self, path):
+        """What was held for *path*, or None if nothing current is."""
+        key = self.stamp(path)
+        if key is None:
+            return None
+        for index, (seen, value, cells) in enumerate(self._items):
+            if seen == key:
+                self._items.append(self._items.pop(index))
+                return value
+        return None
+
+    def put(self, path, value, cells: int):
+        """Hold *value* for *path*, dropping the oldest to stay in budget."""
+        key = self.stamp(path)
+        if key is None:
+            return
+        self._items = [item for item in self._items if item[0] != key]
+        self._items.append((key, value, int(cells)))
+        total = sum(item[2] for item in self._items)
+        while len(self._items) > 1 and total > self.max_cells:
+            total -= self._items.pop(0)[2]
+
+    def clear(self):
+        """Let go of everything held, for a caller watching its memory."""
+        self._items = []
+
+    def __len__(self):
+        return len(self._items)
+
+
 def make_drawable(grid, fill=0.0):
     """Replace NaN in a loaded grid so a volume mapper can draw it.
 

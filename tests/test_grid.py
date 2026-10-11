@@ -210,3 +210,58 @@ def test_line_cut_width_averages_across_the_line():
     # with the normal along K instead, the widening stays on the bright plane
     _d, _p, inplane = line_cut(cube, start, end, width=3, normal=(0.0, 1.0, 0.0))
     assert np.allclose(inplane, 90.0)
+
+
+def test_loaded_grids_holds_and_drops_by_cells():
+    from da6idb.hkl.grid import LoadedGrids
+    with Sandbox() as d:
+        held = LoadedGrids(max_cells=25)
+        paths = []
+        for n in range(3):
+            path = d / f"g{n}.vti"
+            path.write_text(f"pretend grid {n}")
+            paths.append(path)
+            held.put(path, f"grid {n}", cells=10)
+
+        # 30 cells against a budget of 25, so the oldest went
+        assert len(held) == 2
+        assert held.get(paths[0]) is None
+        assert held.get(paths[1]) == "grid 1"
+        assert held.get(paths[2]) == "grid 2"
+
+        # reading one makes it the newest, so the other goes first next time
+        held.get(paths[1])
+        fourth = d / "g3.vti"
+        fourth.write_text("pretend grid 3")
+        held.put(fourth, "grid 3", cells=10)
+        assert held.get(paths[2]) is None, "the least recently used should have gone"
+        assert held.get(paths[1]) == "grid 1"
+        assert held.get(fourth) == "grid 3"
+
+        # one grid over budget is still kept: it is the one on screen
+        big = LoadedGrids(max_cells=5)
+        big.put(paths[0], "huge", cells=1000)
+        assert big.get(paths[0]) == "huge" and len(big) == 1
+
+
+def test_loaded_grids_notices_a_file_that_changed():
+    import time
+    from da6idb.hkl.grid import LoadedGrids
+    with Sandbox() as d:
+        path = d / "g.vti"
+        path.write_text("first")
+        held = LoadedGrids()
+        held.put(path, "the first read", cells=1)
+        assert held.get(path) == "the first read"
+
+        time.sleep(0.01)
+        path.write_text("second, and longer")      # a regrid from elsewhere
+        assert held.get(path) is None, "a changed file must not be served"
+
+        held.put(path, "the second read", cells=1)
+        assert held.get(path) == "the second read"
+
+        # a path that is not there at all is simply a miss, not an error
+        assert held.get(d / "gone.vti") is None
+        held.put(d / "gone.vti", "nothing", cells=1)
+        assert held.get(d / "gone.vti") is None

@@ -107,6 +107,11 @@ Bin a pva detector stack onto a regular HKL grid and save it as ``.vti``.
 - `matches_range(path, hkl_range, tolerance=1e-06)` — Whether an existing .vti was made for this HKL range.
 - `grid_to_vti(image, master=None, hkl_range=None, output=None, step=None, width=None, oversample=1.0, first=0, last=None, frame_step=1, max_cells=MAX_CELLS, reuse=True, progress=None, geometry=None, normalize_transmission=None)` — Bin *image* onto a regular HKL grid and write it as a ``.vti``.
 - `ensure_grid(image, master=None, hkl_range=None, output=None, reuse=True, geometry=None, oversample=1.0, **kwargs)` — Return ``(grid, path, regridded)`` for this file and HKL range.
+- **`LoadedGrids`** — A few gridded maps held in memory, keyed by the file they came from.
+  - `.stamp(path)` — What says a file on disk is still the one that was read.
+  - `.get(self, path)` — What was held for *path*, or None if nothing current is.
+  - `.put(self, path, value, cells)` — Hold *value* for *path*, dropping the oldest to stay in budget.
+  - `.clear(self)` — Let go of everything held, for a caller watching its memory.
 - `make_drawable(grid, fill=0.0)` — Replace NaN in a loaded grid so a volume mapper can draw it.
 - `to_xarray(grid, name='intensity')` — A gridded map as an :class:`xarray.DataArray` with real H/K/L coordinates.
 - `load_vti(path)` — Read a grid written by :func:`grid_to_vti`.
@@ -214,4 +219,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 116 callables, 9 classes -->
+<!-- 120 callables, 10 classes -->

@@ -26,7 +26,7 @@ import numpy as np
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
-from da6idb.hkl.grid import make_drawable
+from da6idb.hkl.grid import LoadedGrids, make_drawable
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
 from volume_style import BACKGROUNDS
@@ -46,6 +46,10 @@ class VtiWindow(QtWidgets.QMainWindow):
     def __init__(self, path=None, parent=None):
         super().__init__(parent)
         self.grid = None
+        # Flipping between files in the list used to read each one again --
+        # 0.84 s for a 94 MB grid, paid even on going back to the one just
+        # looked at.
+        self._grid_cache = LoadedGrids()
         self._theme = theme(BACKGROUNDS[0])
         self.path: Path | None = None
         self._volume_actor = None
@@ -414,21 +418,17 @@ class VtiWindow(QtWidgets.QMainWindow):
         if self.path is not None and self.path.parent != self.folder:
             self.open_folder(self.path.parent)
 
-    def load(self, path):
-        """Read a .vti and show it."""
-        try:
-            import pyvista as pv
-        except ImportError as exc:
-            QtWidgets.QMessageBox.warning(self, "pyvista missing", str(exc))
-            return
-        path = Path(path)
+    def _read(self, path):
+        """Read and prepare a .vti, or None with a dialog saying why."""
+        import pyvista as pv
+
         try:
             grid = pv.read(str(path))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self, "Could not read", f"{path.name}\n\n{type(exc).__name__}: {exc}"
             )
-            return
+            return None
         if not isinstance(grid, pv.ImageData):
             QtWidgets.QMessageBox.warning(
                 self,
@@ -436,22 +436,45 @@ class VtiWindow(QtWidgets.QMainWindow):
                 f"{path.name} holds {type(grid).__name__}, not VTK ImageData.\n"
                 "This viewer draws regular grids; hkl_grid.py writes them.",
             )
-            return
+            return None
         if INTENSITY not in grid.point_data:
             names = list(grid.point_data.keys())
             if not names:
                 QtWidgets.QMessageBox.warning(
                     self, "No data", f"{path.name} carries no point data to draw."
                 )
-                return
+                return None
             # Some other writer's array: draw the first one under our own name.
             grid.point_data[INTENSITY] = grid.point_data[names[0]]
 
         # NaN marks cells nothing reached. A volume mapper does not render it
         # transparent -- it lights the whole empty region up -- so swap it for
         # the bottom of the colour scale. The file itself is not touched.
+        #
+        # This is also why the span has to be held with the grid rather than
+        # recomputed: make_drawable reads the measured range before the NaN
+        # goes, and a second call on the same grid would find none left and
+        # report the fill as if it were data.
+        return grid, make_drawable(grid)
+
+    def load(self, path):
+        """Read a .vti and show it, or show one already in memory."""
+        try:
+            import pyvista as pv            # noqa: F401 -- checked up front
+        except ImportError as exc:
+            QtWidgets.QMessageBox.warning(self, "pyvista missing", str(exc))
+            return
+        path = Path(path)
+        ready = self._grid_cache.get(path)
+        if ready is None:
+            ready = self._read(path)
+            if ready is None:
+                return
+            self._grid_cache.put(path, ready, ready[0].n_points)
+        grid, span = ready
+
         keep = bool(self.keep_check.isChecked() and self.grid is not None)
-        self.span = make_drawable(grid)
+        self.span = span
         self.grid, self.path = grid, path
         self._crop_cache = (None, None)
         # Carrying the set-up over means carrying the camera too: the point is
