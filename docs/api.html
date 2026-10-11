@@ -102,7 +102,7 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 145 callables, 10 classes across
+    Version 0.1.0.dev0 · 147 callables, 10 classes across
     15 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
@@ -130,7 +130,7 @@
 <li><a class="m" href="#da6idb-rois">da6idb.rois</a><div class="sub"><a class="n" href="#da6idb-rois-Rect">Rect</a><a class="n" href="#da6idb-rois-reduce-frame">reduce_frame</a><a class="n" href="#da6idb-rois-empty-series">empty_series</a><a class="n" href="#da6idb-rois-sub-frames">sub_frames</a><a class="n" href="#da6idb-rois-series">series</a></div></li>
 <li><a class="m" href="#da6idb-scan">da6idb.scan</a><div class="sub"><a class="n" href="#da6idb-scan-resolve-hint-field">resolve_hint_field</a><a class="n" href="#da6idb-scan-scan-y-fields">scan_y_fields</a><a class="n" href="#da6idb-scan-stream-fields">stream_fields</a><a class="n" href="#da6idb-scan-read-primary">read_primary</a><a class="n" href="#da6idb-scan-read-baseline">read_baseline</a><a class="n" href="#da6idb-scan-read-scan-info">read_scan_info</a><a class="n" href="#da6idb-scan-describe-fields">describe_fields</a><a class="n" href="#da6idb-scan-default-x-field">default_x_field</a><a class="n" href="#da6idb-scan-scan-x-field">scan_x_field</a><a class="n" href="#da6idb-scan-scan-hkl">scan_hkl</a><a class="n" href="#da6idb-scan-format-scan-hkl">format_scan_hkl</a><a class="n" href="#da6idb-scan-read-grid">read_grid</a><a class="n" href="#da6idb-scan-axis-edges">axis_edges</a><a class="n" href="#da6idb-scan-curve-stats">curve_stats</a><a class="n" href="#da6idb-scan-clipped-limits">clipped_limits</a><a class="n" href="#da6idb-scan-lone-dropouts">lone_dropouts</a><a class="n" href="#da6idb-scan-scale-extend">scale_extend</a><a class="n" href="#da6idb-scan-centered-limits">centered_limits</a><a class="n" href="#da6idb-scan-grid-stats">grid_stats</a></div></li>
 <li><a class="m" href="#da6idb-session">da6idb.session</a><div class="sub"><a class="n" href="#da6idb-session-open-folder">open_folder</a><a class="n" href="#da6idb-session-open-scan">open_scan</a><a class="n" href="#da6idb-session-ScanSet">ScanSet</a><a class="n" href="#da6idb-session-Scan">Scan</a><a class="n" href="#da6idb-session-Images">Images</a><a class="n" href="#da6idb-session-HklMap">HklMap</a></div></li>
-<li><a class="m" href="#da6idb-trends">da6idb.trends</a><div class="sub"><a class="n" href="#da6idb-trends-baseline-trend-fields">baseline_trend_fields</a><a class="n" href="#da6idb-trends-trend-axis">trend_axis</a></div></li>
+<li><a class="m" href="#da6idb-trends">da6idb.trends</a><div class="sub"><a class="n" href="#da6idb-trends-baseline-trend-fields">baseline_trend_fields</a><a class="n" href="#da6idb-trends-trend-choices">trend_choices</a><a class="n" href="#da6idb-trends-trend-value">trend_value</a><a class="n" href="#da6idb-trends-trend-axis">trend_axis</a></div></li>
   </ul></nav>
   <main>
 
@@ -981,6 +981,18 @@
 <p>The answer to &quot;what was stepped across these scans&quot;: every numeric field the whole selection recorded, whose motion over the selection clears the noise bar BASELINE_TREND_SNR and BASELINE_TREND_NOISE describe, best first. Fewer than two scans gives <code>[]</code> -- one point has nothing to be plotted against.</p>
 <p>Ordered by how far each moved relative to its own noise rather than alphabetically, so the motor somebody deliberately drove comes out at the top: scans 32 to 39 put huber_euler_ana_eta third of 19, behind only its own setpoint and the huber_hp alias that reads the same encoder.</p>
 <p>The ranking is of one selection against itself, so it says nothing about a wider one. Over all 146 TiSe2 scans at once eta falls below the bar altogether, correctly -- somewhere in those 146 it was moving <em>during</em> a scan, and a field that will not hold still inside one scan cannot be the axis that scan sits at.</p></div>
+      </article>
+      <article class="entry" id="da6idb-trends-trend-choices" data-name="trend_choices what a trend can follow, as ``{label: (component, fit key)}``.">
+        <h3><a href="#da6idb-trends-trend-choices">trend_choices</a><span class="sig">(peaks=1, mixed=False)</span></h3>
+        <div class="doc"><p>What a trend can follow, as <code>{label: (component, fit key)}</code>.</p>
+<p>One peak offers the fit&#x27;s own numbers and <em>component</em> is <code>None</code>. Two or more offer each component&#x27;s separately -- &quot;Peak 1 center&quot; and so on -- because that is the question a multi-peak trend is asked: not how the fit as a whole drifted but how each peak did.</p>
+<p>The components are numbered as <code>peak_fit_multi</code> returns them, in order of centre, so &quot;Peak 1&quot; is the leftmost in every scan. That is what makes a trend of it mean anything: the line follows one peak through the set rather than jumping whenever two swap which is the taller.</p>
+<p><code>TREND_TOTAL_AREA</code> is offered alongside them, being the one quantity of a several-peak fit that belongs to the fit rather than to any component. <em>mixed</em> adds the mixing, for the shape that fits one.</p></div>
+      </article>
+      <article class="entry" id="da6idb-trends-trend-value" data-name="trend_value read one :func:`trend_choices` entry out of a fit, or none.">
+        <h3><a href="#da6idb-trends-trend-value">trend_value</a><span class="sig">(stats, choice)</span></h3>
+        <div class="doc"><p>Read one <code>trend_choices</code> entry out of a fit, or None.</p>
+<p><code>None</code> wherever the fit has nothing to say -- it was refused, or it came back with fewer components than were asked for -- so a scan that would not fit simply leaves a gap in the line.</p></div>
       </article>
       <article class="entry" id="da6idb-trends-trend-axis" data-name="trend_axis where each scan sits on the trend axis, keyed by ``str(path)``.">
         <h3><a href="#da6idb-trends-trend-axis">trend_axis</a><span class="sig">(paths, against)</span></h3>

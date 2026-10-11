@@ -433,8 +433,12 @@ class HdfViewer(QtWidgets.QMainWindow):
         fit_row.addWidget(self.trend_x_combo)
 
         self.trend_y_combo = QtWidgets.QComboBox()
-        self.trend_y_combo.addItems(_trends.TREND_QUANTITIES)
-        self.trend_y_combo.setToolTip("Which fitted quantity to follow.")
+        self.trend_y_combo.setToolTip(
+            "Which fitted quantity to follow. With more than one peak each\n"
+            "component is offered separately -- peak 1 is the leftmost in\n"
+            "every scan, so a line follows one peak rather than jumping\n"
+            "whenever two swap which is the taller."
+        )
         self.trend_y_combo.currentIndexChanged.connect(self._update_plot)
         fit_row.addWidget(self.trend_y_combo)
 
@@ -1347,14 +1351,50 @@ class HdfViewer(QtWidgets.QMainWindow):
         if [self.trend_x_combo.itemText(i)
                 for i in range(self.trend_x_combo.count())] == choices:
             return
-        self._syncing_fields = True
+        # Block the box, not _syncing_fields: that flag guards the field
+        # table's own handler, and _update_plot does not consult it -- so
+        # refilling a box here would emit currentIndexChanged, call
+        # _update_plot, and come straight back round to this line.
+        blocked = QtCore.QSignalBlocker(self.trend_x_combo)
         try:
             self.trend_x_combo.clear()
             self.trend_x_combo.addItems(choices)
             if current in choices:
                 self.trend_x_combo.setCurrentText(current)
         finally:
-            self._syncing_fields = False
+            del blocked
+
+    def _refresh_trend_quantities(self):
+        """Offer each component's numbers once there is more than one."""
+        shape = self.fit_combo.currentText()
+        choices = _trends.trend_choices(
+            self.peaks_spin.value(), shape in _fit.PEAK_MIX)
+        existing = [self.trend_y_combo.itemText(i)
+                    for i in range(self.trend_y_combo.count())]
+        if existing == list(choices):
+            return choices
+        current = self.trend_y_combo.currentText()
+        # Block the box, not _syncing_fields: that flag guards the field
+        # table's own handler, and _update_plot does not consult it -- so
+        # refilling a box here would emit currentIndexChanged, call
+        # _update_plot, and come straight back round to this line.
+        blocked = QtCore.QSignalBlocker(self.trend_y_combo)
+        try:
+            self.trend_y_combo.clear()
+            self.trend_y_combo.addItems(choices)
+            if current in choices:
+                self.trend_y_combo.setCurrentText(current)
+            else:
+                # Going from one peak to several, "Fit center" becomes
+                # "Peak 1 center"; keep the quantity rather than resetting.
+                tail = current.split(" ", 1)[-1] if current else ""
+                for label in choices:
+                    if label.split(" ", 2)[-1] == tail:
+                        self.trend_y_combo.setCurrentText(label)
+                        break
+        finally:
+            del blocked
+        return choices
 
     def _draw_trend(self, paths, x_field, y_fields, monitor_field):
         """Fill the plot beside the curves: one point per scan.
@@ -1383,8 +1423,12 @@ class HdfViewer(QtWidgets.QMainWindow):
                 else "Select two or more scans")
             return
         self._refresh_trend_axes(paths)
+        choices = self._refresh_trend_quantities()
+        choice = choices.get(self.trend_y_combo.currentText())
+        if choice is None:
+            return
+        wanted = self.peaks_spin.value()
         against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
-        key = _trends.TREND_QUANTITIES[self.trend_y_combo.currentText()]
         axis = _trends.trend_axis(paths, against)
 
         series: dict[str, list[tuple[float, float]]] = {}
@@ -1404,7 +1448,9 @@ class HdfViewer(QtWidgets.QMainWindow):
                 if monitor is not None:
                     with np.errstate(divide="ignore", invalid="ignore"):
                         y = np.where(monitor != 0, y / monitor, np.nan)
-                value = _fit.peak_fit(x, y, shape).get(key)
+                got = (_fit.peak_fit(x, y, shape) if wanted == 1
+                       else _fit.peak_fit_multi(x, y, shape, wanted))
+                value = _trends.trend_value(got, choice)
                 if value is not None:
                     series.setdefault(y_field, []).append((where, float(value)))
 

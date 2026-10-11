@@ -260,6 +260,8 @@ The objects a notebook starts from.
 What was stepped across a set of scans, and plotting against it.
 
 - `baseline_trend_fields(paths)` — Baseline fields worth trending against, most deliberate first.
+- `trend_choices(peaks=1, mixed=False)` — What a trend can follow, as ``{label: (component, fit key)}``.
+- `trend_value(stats, choice)` — Read one :func:`trend_choices` entry out of a fit, or None.
 - `trend_axis(paths, against)` — Where each scan sits on the trend axis, keyed by ``str(path)``.
 
-<!-- 145 callables, 10 classes -->
+<!-- 147 callables, 10 classes -->
