@@ -310,6 +310,24 @@ def scan_number(path: Path) -> str:
     digits = re.findall(r"\d+", stem)
     return digits[-1] if digits else stem
 
+def scan_tags(paths: list[Path]) -> dict[str, str]:
+    """A short name per path, keyed by ``str(path)``: enough to tell them apart.
+
+    The scan number alone normally does it. Where it does not -- two series in
+    one directory whose numbers collide, :func:`scan_number` taking the last
+    run of digits either way -- every name gains its series. The file listing
+    gets away with the bare number because its other six columns disambiguate;
+    a bare menu of numbers would not.
+    """
+    numbers = [scan_number(path) for path in paths]
+    if len(set(numbers)) != len(numbers):
+        return {
+            str(path): f"{file_prefix(path)} {number}"
+            for path, number in zip(paths, numbers)
+        }
+    return {str(path): number for path, number in zip(paths, numbers)}
+
+
 def file_prefix(path: Path) -> str:
     """The part of a file name in front of the scan number: ``tise2_2``.
 

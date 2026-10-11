@@ -71,6 +71,7 @@ from da6idb import fit as _fit
 from da6idb.scan import (
     axis_edges,
     curve_stats,
+    clipped_limits,
     default_x_field,
     scan_y_fields,
     format_scan_hkl,
@@ -403,6 +404,18 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.peaks_spin.valueChanged.connect(self._update_plot)
         axis_row.addWidget(self.peaks_spin)
+
+        self.clip_btn = QtWidgets.QPushButton("Clip map scale")
+        self.clip_btn.setCheckable(True)
+        self.clip_btn.setToolTip(
+            "Leave the most extreme 0.5% at each end out of a colour map's\n"
+            "scale. One or two wild cells -- a glitch, or the beam off the\n"
+            "sample -- otherwise stretch it until everything else is one\n"
+            "flat shade. Cells outside simply saturate, and the colour bar\n"
+            "grows arrows to say so."
+        )
+        self.clip_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.clip_btn)
 
         self.average_btn = QtWidgets.QPushButton("Average repeats")
         self.average_btn.setCheckable(True)
@@ -956,7 +969,11 @@ class HdfViewer(QtWidgets.QMainWindow):
         # 2D map button off, as ordinary curves. Read it either way so the
         # button can tell the user whether there is a raster to switch to.
         grid = None
-        if paths and len(y_fields) == 1:
+        if paths and y_fields:
+            # One field only: a colour map has one colour axis. The hints of
+            # a grid scan commonly nominate two detectors, which is right for
+            # the curve plot and would otherwise leave the map button dead,
+            # so the first is drawn and the title says it is the first.
             grid = read_grid(paths[0], y_fields[0], monitor_field)
         self.grid_btn.setEnabled(grid is not None)
         if not self.grid_btn.isChecked():
@@ -1182,7 +1199,12 @@ class HdfViewer(QtWidgets.QMainWindow):
         label = value_field + (f" / {monitor_field}" if monitor_field else "")
 
         x_edges, y_edges = axis_edges(grid["x"]), axis_edges(grid["y"])
-        mesh = self.ax.pcolormesh(x_edges, y_edges, grid["z"], shading="flat")
+        low = high = None
+        extend = "neither"
+        if self.clip_btn.isChecked():
+            low, high, extend = clipped_limits(grid["z"])
+        mesh = self.ax.pcolormesh(x_edges, y_edges, grid["z"], shading="flat",
+                                  vmin=low, vmax=high)
 
         self.ax.set_xlabel(grid["x_name"])
         self.ax.set_ylabel(grid["y_name"])
@@ -1190,9 +1212,13 @@ class HdfViewer(QtWidgets.QMainWindow):
         if len(paths) > 1:
             # Two colour maps cannot share one pair of axes.
             title += f"   (first of {len(paths)} selected)"
+        if len(self._checked_y_fields()) > 1:
+            title += f"   (showing {value_field})"
         missing = int(np.count_nonzero(~np.isfinite(grid["z"])))
         if missing:
             title += f"   [{missing} point(s) not measured]"
+        if low is not None:
+            title += f"   [scale {low:.6g} to {high:.6g}]"
         self.ax.set_title(title, fontsize=9)
         self.ax.grid(False)
 
@@ -1224,7 +1250,9 @@ class HdfViewer(QtWidgets.QMainWindow):
         # afterwards gives the bar's strip back to the plot and the bar ends
         # up drawn on top of the map.
         self.figure.tight_layout()
-        self._colorbar = self.figure.colorbar(mesh, ax=self.ax)
+        # The arrows say the scale does not reach its own data, rather than
+        # leaving the clipping to be noticed.
+        self._colorbar = self.figure.colorbar(mesh, ax=self.ax, extend=extend)
         self._colorbar.set_label(label)
         self.canvas.draw_idle()
 

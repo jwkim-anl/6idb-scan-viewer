@@ -331,6 +331,29 @@ def read_baseline(path: Path) -> dict[str, tuple[object, object]]:
             out[name] = (before, after)
     return out
 
+def _dwell(seconds: np.ndarray) -> float | None:
+    """The counting time per point in *seconds*, as the one number it mostly is.
+
+    The commonest reading, not the first. A scan whose dwell is not the same
+    at every point is rare -- 32 of the 1012 scans in the two test
+    directories -- and in every one of those it is a stray point or two
+    rather than a change of plan: scan 83 reads 0.2 s at 44 of its 45 points
+    and 0.0 at the first, scan 172 reads 5.0 at 108 of 109. The first point
+    is the one that strays, being the one the scaler was still settling into,
+    so reading the dwell off the front reports 0.0 for a scan that counted
+    for 0.2 s throughout -- which is what 18 of those 1012 would have done.
+
+    No rounding before counting: the repeated readings are bit-identical in
+    all 231 scans here that record one, so the only thing rounding could
+    merge is strays, which are outvoted anyway.
+    """
+    seconds = seconds[np.isfinite(seconds)]
+    if seconds.size == 0:
+        return None
+    values, counts = np.unique(seconds, return_counts=True)
+    return float(values[np.argmax(counts)])
+
+
 def read_scan_info(path: Path) -> dict:
     """What the scan was: plan, points, motors and the range they covered.
 
@@ -400,8 +423,7 @@ def read_scan_info(path: Path) -> dict:
                 counter = primary.get("scaler_time")
                 if counter is not None and "value" in counter:
                     seconds = np.asarray(counter["value"][()], dtype=float).ravel()
-                    if seconds.size:
-                        info["count_time"] = float(seconds[0])
+                    info["count_time"] = _dwell(seconds)
                 for name in primary:
                     field = primary[name]
                     stamp = field.get("time") if isinstance(field, h5py.Group) else None
@@ -735,6 +757,172 @@ def curve_stats(x: np.ndarray, y: np.ndarray) -> dict[str, float | None]:
         stats["center"] = (left + right) / 2.0
         stats["fwhm"] = abs(right - left)
     return stats
+
+# Where a map's colour clipping starts: on a 1500-cell raster, the eight
+# most extreme cells either way. Small enough that a map with nothing wrong
+# with it barely changes, which is what a starting point should do; one or
+# two cells are what usually wreck a scale.
+COLOR_CLIP_PERCENT = 0.5
+
+
+# A point whose monitor has collapsed to less than this fraction of the
+# column's own median was taken with no beam, so none of its channels
+# mean anything -- see :func:`lone_dropouts`.
+BEAM_GONE_FRACTION = 0.05
+
+def clipped_limits(
+    z: np.ndarray, percent: float = COLOR_CLIP_PERCENT
+) -> tuple[float | None, float | None, str]:
+    """Colour limits leaving out the most extreme *percent* at each end.
+
+    A handful of wild cells -- a spot where the beam ran off the sample, a
+    detector glitch -- stretch a map's colour scale over a range nothing else
+    occupies, leaving the rest of it one flat shade. Cutting the scale back to
+    where the bulk of the data lives brings that structure back; the cells
+    outside simply saturate.
+
+    How much to cut is asked for rather than worked out, which is the point.
+    Rules that decide for themselves what is an outlier (Tukey's fences on the
+    interquartile range, say) read the top of a sharp peak as one, because a
+    peaked map legitimately has a long tail above its upper quartile. On the
+    sample-position rasters this beamline lines up on -- ``huber_euler_z`` by
+    ``huber_euler_y`` against a detector total, where the peak *is* the result
+    -- those fences clip most of the peak away: measured over the twelve of
+    them, 3x IQR left scan 468 with 7% of its height, 232 with 14%, 228 with
+    32%. A number someone typed can be wrong, but it cannot be surprising,
+    and the same number gives the same answer on every map it is applied to.
+
+    *percent* is a percentile, so what it costs depends on how the values are
+    distributed, not on how extreme they are: 0.5 on a 1500-cell raster is the
+    eight cells at each end whatever they hold. Nothing stops it from being
+    large -- a map still washed out after a fraction of a percent may well
+    need several -- but past a few percent it is no longer only spikes going.
+
+    Returns the two limits and which ends they actually cut, in the wording
+    :meth:`Figure.colorbar` wants for its ``extend`` arrows, so a clipped
+    scale says on the bar that it is clipped. ``(None, None, "neither")``
+    means leave the limits alone.
+    """
+    finite = np.asarray(z, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 3:
+        return None, None, "neither"
+    low, high = (float(v) for v in np.percentile(finite, [percent, 100.0 - percent]))
+    if not (np.isfinite(low) and np.isfinite(high)) or low >= high:
+        # Flat, or so nearly flat that the percentiles coincide.
+        return None, None, "neither"
+    return low, high, scale_extend(finite, low, high)
+
+
+def lone_dropouts(monitor: np.ndarray) -> np.ndarray:
+    """Mask the points where the beam was gone for that point alone.
+
+    A dropout is a point whose *monitor* has collapsed to less than
+    :data:`BEAM_GONE_FRACTION` of the column's own median. Every channel goes
+    with it -- on scan 239's row 367 the monitor reads 5372 against a median
+    of 1.85e6, ``LockDC`` 5502 against 713000 -- so the point carries no
+    measurement at all, and in the reduction it drags a whole energy bin with
+    it: 239's XMuCD spans 0.511 with that row in and 0.0262 with it out.
+
+    Unlike :func:`clipped_limits` above this needs no amount typed into it,
+    and the difference is worth stating because the two sit side by side. The
+    clip is a judgement -- where a peak stops being signal is not written in
+    the data. This is not: a monitor measures the beam arriving, and a beam
+    that is arriving at 2% of normal has gone. The two populations are forty
+    apart with nothing between them, so the threshold is a reading rather than
+    a choice.
+
+    Only *isolated* dropouts are masked -- both neighbours must be live. A run
+    of them is not a spike but a dump, and the scan should show it: of the 24
+    scans in these directories carrying a dead point, 17 carry nothing but
+    single ones and 7 were taken while the beam was down, scan 244 for 265
+    consecutive rows. Deleting that would hide a quarter of the run behind a
+    curve that looked fine. Length, not depth, is what tells the two apart --
+    scan 89's one dead row is 5% of a 20-point scan and still a spike.
+
+    Neighbours are the rows either side *in acquisition order*, so this wants
+    one file's column at a time: run two files together and the join would
+    stand one scan's last row next to another's first.
+
+    What this deliberately will not catch is a spike the monitor knew nothing
+    about. Reduced index 80 of scans 239 and 242 (E = 7.26907) is a 13-sigma
+    one-point excursion with the monitor at 0.91 of median and all four raw
+    rows agreeing to four decimals -- a monochromator glitch, reproduced in
+    every repeat. It is data, and it stays.
+    """
+    values = np.asarray(monitor, dtype=float)
+    gone = np.zeros(values.shape, dtype=bool)
+    if values.ndim != 1 or values.size < 3:
+        return gone
+    finite = values[np.isfinite(values)]
+    if finite.size < 3:
+        return gone
+    median = float(np.median(finite))
+    if not np.isfinite(median) or median <= 0.0:
+        # No scale to judge against: a monitor that is flat zero, or counting
+        # down, says nothing about which of its points had beam.
+        return gone
+    dead = np.isfinite(values) & (values < BEAM_GONE_FRACTION * median)
+    padded = np.concatenate(([False], dead, [False]))
+    return dead & ~padded[:-2] & ~padded[2:]
+
+
+def scale_extend(z: np.ndarray, low: float | None, high: float | None) -> str:
+    """Which ends of *z* fall outside ``(low, high)``, as colour-bar arrows.
+
+    In the wording :meth:`Figure.colorbar` wants for ``extend``, so a scale
+    that does not reach its own data says so on the bar rather than leaving it
+    to be noticed. ``None`` for a limit is matplotlib's "fit the data", which
+    by definition cuts nothing off at that end.
+
+    Asked separately from the limits because the limits move after they are
+    first worked out: :func:`centered_limits` widens a range, and cells that
+    saturated against the clipped one need not saturate against the wider. An
+    arrow left over from the narrower scale points at data that is not out
+    there.
+    """
+    finite = np.asarray(z, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return "neither"
+    cuts = (
+        low is not None and low > float(finite.min()),
+        high is not None and high < float(finite.max()),
+    )
+    return {
+        (True, True): "both", (True, False): "min",
+        (False, True): "max", (False, False): "neither",
+    }[cuts]
+
+
+def centered_limits(
+    z: np.ndarray, low: float | None, high: float | None
+) -> tuple[float | None, float | None]:
+    """``(low, high)`` widened until zero sits exactly in the middle.
+
+    A diverging colour map is read by where its middle colour falls, and left
+    to the data that lands wherever the range happens to centre. On scan 156's
+    XMCD the clipped range is -0.0009 to +0.0036, which puts white at +0.0013:
+    a map with signal everywhere, drawn so that most of it reads as none. Zero
+    is where white belongs, because zero is what the map is a difference from.
+
+    Widening to whichever end reaches further costs the shorter end some of
+    its contrast, and buys a map that can be read without consulting the bar.
+    Either limit may be ``None``, meaning the data's own extreme.
+
+    Only ever widens, so no cell that was inside the scale leaves it -- but
+    the arrows still have to be recomputed, which is :func:`scale_extend`.
+    """
+    finite = np.asarray(z, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return low, high
+    lo = float(finite.min()) if low is None else low
+    hi = float(finite.max()) if high is None else high
+    reach = max(abs(lo), abs(hi))
+    # Every cell is zero, and there is no scale left to centre on it.
+    return (-reach, reach) if reach > 0 else (low, high)
+
 
 def grid_stats(grid: dict) -> dict[str, float | None]:
     """Max/min of a grid and the (x, y) they sit at."""

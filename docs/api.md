@@ -71,6 +71,7 @@ Finding the files a scan is made of, and pairing them up.
 - `is_image_file(path)` — Whether *path* is itself an image file (i.e. it holds an image stack).
 - `resolve_image_file(path)` — The image file to open for *path*, which may be a master or an image file.
 - `scan_number(path)` — The scan number in a file name: ``00008`` from ``tise2_2_00008_master.hdf``.
+- `scan_tags(paths)` — A short name per path, keyed by ``str(path)``: enough to tell them apart.
 - `file_prefix(path)` — The part of a file name in front of the scan number: ``tise2_2``.
 - `list_hdf_files(directory)` — Return the HDF5 files directly inside *directory*, sorted by name.
 
@@ -204,6 +205,10 @@ Reading a master file: its metadata, its streams and the numbers in them.
 - `read_grid(path, value_field, monitor_field='')` — *value_field* laid out over a two-motor grid scan, or ``None``.
 - `axis_edges(values)` — Cell boundaries around the grid's sample positions.
 - `curve_stats(x, y)` — Max/min (with position), and FWHM center/width, for one plotted curve.
+- `clipped_limits(z, percent=COLOR_CLIP_PERCENT)` — Colour limits leaving out the most extreme *percent* at each end.
+- `lone_dropouts(monitor)` — Mask the points where the beam was gone for that point alone.
+- `scale_extend(z, low, high)` — Which ends of *z* fall outside ``(low, high)``, as colour-bar arrows.
+- `centered_limits(z, low, high)` — ``(low, high)`` widened until zero sits exactly in the middle.
 - `grid_stats(grid)` — Max/min of a grid and the (x, y) they sit at.
 
 ### `da6idb.session`
@@ -248,4 +253,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 137 callables, 10 classes -->
+<!-- 142 callables, 10 classes -->

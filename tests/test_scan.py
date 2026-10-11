@@ -204,3 +204,47 @@ def test_the_example_scans_nominate_their_own_signals():
         "x": sv.scan_x_field(EXAMPLE_MASTER, fields),
         "y": sv.scan_y_fields(EXAMPLE_MASTER, fields),
     })
+
+
+def test_dwell_is_the_commonest_reading_not_the_first():
+    # the first point is the one the scaler was still settling into
+    assert sv._dwell(np.array([0.0] + [0.2] * 44)) == 0.2
+    assert sv._dwell(np.array([5.0] * 108 + [1.0])) == 5.0
+    assert sv._dwell(np.array([0.2, 0.2, 0.2])) == 0.2
+    assert sv._dwell(np.array([])) is None
+    assert sv._dwell(np.array([np.nan, np.nan])) is None
+
+
+def test_clipping_brings_a_map_back_from_two_wild_cells():
+    rng = np.random.default_rng(0)
+    z = rng.normal(100.0, 5.0, (30, 50))
+    z[7, 12] = 50_000.0          # a detector glitch
+    z[20, 3] = -9_000.0
+    low, high, extend = sv.clipped_limits(z)
+    assert 80.0 < low < 95.0 and 105.0 < high < 125.0
+    assert extend == "both"      # the bar says it is cutting both ends
+    # a map with nothing wrong with it is barely touched
+    clean = rng.normal(100.0, 5.0, (30, 50))
+    low, high, _e = sv.clipped_limits(clean)
+    assert abs(low - clean.min()) < 6.0 and abs(high - clean.max()) < 6.0
+    assert sv.scale_extend(z, None, None) == "neither"
+    assert sv.scale_extend(z, float(z.min()), 1000.0) == "max"
+
+
+def test_centered_limits_put_zero_in_the_middle():
+    z = np.linspace(-0.0009, 0.0036, 50)
+    low, high = sv.centered_limits(z, -0.0009, 0.0036)
+    assert np.isclose(low, -high)                  # white lands on zero
+    assert high >= 0.0036 and low <= -0.0009       # and nothing is cut
+    # it only ever widens, so data already centred is left alone
+    assert sv.centered_limits(z, -1.0, 1.0) == (-1.0, 1.0)
+
+
+def test_lone_dropouts_catch_the_point_the_beam_missed():
+    monitor = np.full(40, 1.85e6)
+    monitor[17] = 5372.0                            # the beam was gone
+    flagged = sv.lone_dropouts(monitor)
+    assert list(np.flatnonzero(flagged)) == [17]
+    # a monitor that simply drifts is not a dropout
+    assert not sv.lone_dropouts(np.linspace(1.0e6, 0.6e6, 40)).any()
+    assert not sv.lone_dropouts(np.full(40, 1.85e6)).any()

@@ -87,3 +87,15 @@ def test_example_pair_resolves():
     files._RESOLVE_CACHE.clear()
     assert files.image_path_for_master(EXAMPLE_MASTER).name == EXAMPLE_IMAGE.name
     assert files.master_path_for_image(EXAMPLE_IMAGE).name == EXAMPLE_MASTER.name
+
+
+def test_scan_tags_gain_their_series_only_when_numbers_collide():
+    from pathlib import Path
+    alone = [Path("tise2_2_00006_master.hdf"), Path("tise2_2_00007_master.hdf")]
+    tags = files.scan_tags(alone)
+    assert sorted(tags.values()) == ["00006", "00007"]   # the number is enough
+    # two series in one directory sharing a number: both gain the series
+    clash = alone + [Path("sio_sao_sto_00007_master.hdf")]
+    tags = files.scan_tags(clash)
+    assert tags[str(Path("tise2_2_00007_master.hdf"))] == "tise2_2 00007"
+    assert tags[str(Path("sio_sao_sto_00007_master.hdf"))] == "sio_sao_sto 00007"
