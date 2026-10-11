@@ -25,7 +25,7 @@ hkl_setup.json
 last_scan.png
 
 # Written by the example notebook when it runs
-examples/exported/
+exported/
 
 # Python bytecode
 __pycache__/

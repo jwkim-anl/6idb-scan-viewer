@@ -7,7 +7,7 @@ pvapy streaming consumer into a sibling file, and the master records its name in
 ``entry/instrument/bluesky/metadata/pva_streaming``::
 
     file_name: pva_tise2_2_00006.h5
-    file_path: ~/6idb-bits/sarah_26_3_2
+    file_path: ~/6idb-bits/<experiment directory>
 
 ``file_path`` is the beamline's path, so :func:`image_path_for_master` resolves
 ``file_name`` against the master's own directory and falls back to deriving

@@ -46,7 +46,7 @@ At the beamline, run with the environment that has these installed, e.g.
 
 ```bash
 DISPLAY=localhost:10.0 \
-  /home/beams18/USER6IDB/.conda/envs/6idb-bits/bin/python scan_viewer.py [directory]
+  /path/to/6idb-bits/bin/python scan_viewer.py [directory]
 ```
 
 ---

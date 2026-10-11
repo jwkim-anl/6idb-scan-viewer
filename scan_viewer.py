@@ -51,7 +51,7 @@ from it.
 Run with the ``6idb-bits`` environment's Python, with a display available::
 
     DISPLAY=localhost:10.0 \
-        /home/beams18/USER6IDB/.conda/envs/6idb-bits/bin/python scan_viewer.py \
+        /path/to/6idb-bits/bin/python scan_viewer.py \
         [initial_directory]
 """
 
