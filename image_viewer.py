@@ -269,6 +269,16 @@ FILE_COLORS = [
 PLOT_BACKGROUND = "w"
 PLOT_FOREGROUND = "k"
 
+# This window is the only one left that draws with pyqtgraph, so the global
+# default belongs here. It used to be set by scan_viewer, which no longer
+# imports pyqtgraph at all -- and while it was there, the image display came
+# up light when this window was opened from the scan viewer and dark when it
+# was opened on its own. Light either way now, which is the one most of this
+# window already is.
+pg.setConfigOption("background", PLOT_BACKGROUND)
+pg.setConfigOption("foreground", PLOT_FOREGROUND)
+pg.setConfigOptions(antialias=True)
+
 
 class ContextRectROI(pg.RectROI):
     """One panel's drawn rectangle for a :class:`SharedRoi`.

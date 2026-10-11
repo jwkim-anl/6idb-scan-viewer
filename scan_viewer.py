@@ -63,7 +63,6 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pyqtgraph as pg
 
 from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
 from da6idb import combine as _combine
@@ -97,32 +96,11 @@ from PyQt5 import QtWidgets
 from image_viewer import ImageViewerWindow
 
 
-# Curves are drawn with pyqtgraph, which defaults to a black canvas; the rest
-# of this window is light, and so is the matplotlib grid plot beside it.
-pg.setConfigOption("background", "w")
-pg.setConfigOption("foreground", "k")
-pg.setConfigOptions(antialias=True)
-
 # Enough distinct colours that a handful of files times a handful of fields
 # stay tellable apart, in a fixed order so a curve keeps its colour across a
 # redraw.
-# pyqtgraph puts a grid line at every tick of every level, three deep, which
-# inks about 15% of the plot and reads as a mesh. Two levels halves the lines
-# and a lighter alpha softens what is left.
-GRID_ALPHA = 0.12
-GRID_LEVELS = 2
-
-class SparseAxis(pg.AxisItem):
-    """An axis offering only the coarser tick levels.
-
-    The grid is drawn from the ticks, so trimming the finest level is what
-    actually thins it; alpha alone only makes the same mesh fainter. Labels
-    come from the top two levels, so they are unaffected.
-    """
-
-    def tickValues(self, minVal, maxVal, size):
-        return super().tickValues(minVal, maxVal, size)[:GRID_LEVELS]
-
+# Faint: a grid is a reference, not a mesh drawn over the data.
+GRID_ALPHA = 0.25
 
 FIT_NONE = "None"
 AVERAGE_NONE, AVERAGE_REPEATS, AVERAGE_ALL = "None", "Repeats", "All selected"
@@ -504,37 +482,25 @@ class HdfViewer(QtWidgets.QMainWindow):
 
         canvas_box = QtWidgets.QVBoxLayout()
 
-        # Curves are pyqtgraph, the colour map stays matplotlib: one gives the
-        # interaction, the other the colour bar and the print-quality output.
-        # They take turns in a stack rather than fighting over the space.
+        # Both pages are matplotlib: one toolkit, one look, and the same
+        # zoom/pan/save toolbar and print-quality output on the curves as
+        # on the colour map. They take turns in a stack rather than
+        # fighting over the space.
         self.plot_stack = QtWidgets.QStackedWidget()
-        self.curve_plot = pg.PlotWidget(axisItems={
-            "bottom": SparseAxis(orientation="bottom"),
-            "left": SparseAxis(orientation="left"),
-        })
-        self.curve_item = self.curve_plot.getPlotItem()
-        self.curve_item.showGrid(x=True, y=True, alpha=GRID_ALPHA)
-        self.curve_item.addLegend(offset=(-10, 10), labelTextSize="8pt")
-        self.curve_vb = self.curve_item.getViewBox()
 
-        # dY/dX shares the X axis but needs its own Y scale, so it gets a
-        # second view box hung off the right axis. Linking the X and keeping
-        # the geometry in step is all that ties them together -- unlike a
-        # matplotlib twin axis, neither one can drag the other's range about.
-        self.deriv_vb = pg.ViewBox()
-        self.curve_item.showAxis("right")
-        self.curve_item.scene().addItem(self.deriv_vb)
-        self.curve_item.getAxis("right").linkToView(self.deriv_vb)
-        self.deriv_vb.setXLink(self.curve_item)
-        self.curve_vb.sigResized.connect(self._sync_derivative_view)
-        self.plot_stack.addWidget(self.curve_plot)
+        self.curve_figure = Figure(figsize=(6, 4))
+        self.curve_canvas = FigureCanvasQTAgg(self.curve_figure)
+        self.curve_ax = self.curve_figure.add_subplot(111)
+        # dY/dX shares the X axis and wants its own Y scale.
+        self.deriv_ax = self.curve_ax.twinx()
+        self.deriv_ax.set_visible(False)
+        self.curve_toolbar = NavigationToolbar2QT(self.curve_canvas, panel)
 
         self.figure = Figure(figsize=(6, 4))
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.ax = self.figure.add_subplot(111)
         # Kept so the grid's own readout can be swapped in and out.
         self._default_format_coord = self.ax.format_coord
-        self._derivative_items: list = []
         # Gives the standard matplotlib "zoom to rectangle" (drag to zoom),
         # pan, and home/back/forward view-history controls.
         self.toolbar = NavigationToolbar2QT(self.canvas, panel)
@@ -549,10 +515,18 @@ class HdfViewer(QtWidgets.QMainWindow):
         if hasattr(self.toolbar, "locLabel"):
             self.toolbar.locLabel.hide()
         self.toolbar.set_message = self.coord_label.setText
+        if hasattr(self.curve_toolbar, "locLabel"):
+            self.curve_toolbar.locLabel.hide()
+        self.curve_toolbar.set_message = self.coord_label.setText
 
-        # The matplotlib toolbar belongs to the colour map, so it travels with
-        # it; the curve plot has pyqtgraph's own wheel-zoom, drag-pan and
-        # right-click menu instead.
+        # A toolbar per page, each travelling with its own canvas.
+        curve_page = QtWidgets.QWidget()
+        curve_box = QtWidgets.QVBoxLayout(curve_page)
+        curve_box.setContentsMargins(0, 0, 0, 0)
+        curve_box.addWidget(self.curve_toolbar)
+        curve_box.addWidget(self.curve_canvas, 1)
+        self.plot_stack.addWidget(curve_page)
+
         grid_page = QtWidgets.QWidget()
         grid_box = QtWidgets.QVBoxLayout(grid_page)
         grid_box.setContentsMargins(0, 0, 0, 0)
@@ -566,13 +540,14 @@ class HdfViewer(QtWidgets.QMainWindow):
         # rather than taking their place, and you can watch a fit and the
         # trend it feeds at once. Draggable, because how much room it
         # wants depends on what is on it.
-        self.trend_plot = pg.PlotWidget(axisItems={
-            "bottom": SparseAxis(orientation="bottom"),
-            "left": SparseAxis(orientation="left"),
-        })
-        self.trend_item = self.trend_plot.getPlotItem()
-        self.trend_item.showGrid(x=True, y=True, alpha=GRID_ALPHA)
-        self.trend_item.addLegend(offset=(-10, 10), labelTextSize="8pt")
+        self.trend_figure = Figure(figsize=(3.4, 4))
+        self.trend_canvas = FigureCanvasQTAgg(self.trend_figure)
+        self.trend_ax = self.trend_figure.add_subplot(111)
+        self.trend_plot = QtWidgets.QWidget()
+        trend_box = QtWidgets.QVBoxLayout(self.trend_plot)
+        trend_box.setContentsMargins(0, 0, 0, 0)
+        trend_box.addWidget(NavigationToolbar2QT(self.trend_canvas, panel))
+        trend_box.addWidget(self.trend_canvas, 1)
         self.trend_plot.hide()
 
         plots = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -585,11 +560,6 @@ class HdfViewer(QtWidgets.QMainWindow):
         canvas_box.addWidget(plots, 1)
         canvas_box.addWidget(self.coord_label)
 
-        # Both plots report the pointer to the same label.
-        self._curve_mouse_proxy = pg.SignalProxy(
-            self.curve_item.scene().sigMouseMoved, rateLimit=60,
-            slot=self._on_curve_mouse_moved,
-        )
         canvas_widget = QtWidgets.QWidget()
         canvas_widget.setLayout(canvas_box)
         layout.addWidget(canvas_widget, 1)
@@ -1079,14 +1049,13 @@ class HdfViewer(QtWidgets.QMainWindow):
                     prev_xlim = self.ax.get_xlim()
                 if not self.ax.get_autoscaley_on():
                     prev_ylim = self.ax.get_ylim()
-            elif mode == "curves" and self.curve_item.listDataItems():
-                # pyqtgraph turns auto-range off for an axis the moment the
-                # user zooms or pans it, which is the same signal matplotlib's
-                # autoscale flag gives.
-                auto_x, auto_y = self.curve_vb.autoRangeEnabled()
-                x_range, y_range = self.curve_vb.viewRange()
-                prev_xlim = None if auto_x else tuple(x_range)
-                prev_ylim = None if auto_y else tuple(y_range)
+            elif mode == "curves" and self.curve_ax.lines:
+                # The autoscale flag is matplotlib's own record of whether
+                # the user has zoomed or panned that axis.
+                if not self.curve_ax.get_autoscalex_on():
+                    prev_xlim = self.curve_ax.get_xlim()
+                if not self.curve_ax.get_autoscaley_on():
+                    prev_ylim = self.curve_ax.get_ylim()
         self._last_paths = path_key
         self._last_x_field = x_field
         self._last_monitor_field = monitor_field
@@ -1101,9 +1070,10 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._clear_curves()
         if not paths or not x_field or not y_fields:
             self.plot_stack.setCurrentIndex(0)
-            self.curve_item.setTitle(
-                "Select file(s), an X field and at least one Y field."
-            )
+            self.curve_ax.set_title(
+                "Select file(s), an X field and at least one Y field.",
+                fontsize=9)
+            self.curve_canvas.draw_idle()
             self.stats_table.setRowCount(0)
             return
 
@@ -1171,15 +1141,11 @@ class HdfViewer(QtWidgets.QMainWindow):
 
         for index, (label, x, y) in enumerate(curves):
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
-            self.curve_item.plot(
-                x, y, name=label,
-                pen=pg.mkPen(color, width=1),
-                symbol="o", symbolSize=4,
-                symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color),
-                # A normalised curve can divide by a zero monitor; break the
-                # line at those rather than drawing through them.
-                connect="finite",
-            )
+            # A normalised curve can divide by a zero monitor. matplotlib
+            # breaks a line at NaN of its own accord, which is what is
+            # wanted: the gap shows rather than being drawn through.
+            self.curve_ax.plot(x, y, label=label, color=color, lw=1,
+                               marker="o", ms=3)
 
         for index, (got, (label, x, _y)) in enumerate(zip(fits, curves)):
             if got is None:
@@ -1190,96 +1156,71 @@ class HdfViewer(QtWidgets.QMainWindow):
             model = _fit.peak_model(grid, shape, got)
             if model is None:
                 continue
-            self.curve_item.plot(grid, model,
-                                 pen=pg.mkPen(color, width=2))
+            self.curve_ax.plot(grid, model, color=color, lw=1.6)
             if not self.fit_parts_btn.isChecked():
                 continue
             for piece in _fit.peak_parts(grid, shape, got):
-                self.curve_item.plot(
-                    grid, piece,
-                    pen=pg.mkPen(color, width=1, style=QtCore.Qt.DotLine))
+                self.curve_ax.plot(grid, piece, color=color, lw=0.9, ls=":")
 
-        self.curve_item.setTitle(None)
-        self.curve_item.setLabel("bottom", x_field)
+        self.curve_ax.set_xlabel(x_field)
         ylabel = ", ".join(y_fields)
         if normalize:
             ylabel += f" / {monitor_field}"
-        self.curve_item.setLabel("left", ylabel)
+        self.curve_ax.set_ylabel(ylabel)
+        self.curve_ax.grid(True, alpha=GRID_ALPHA)
+        if len(curves) > 1:
+            # One curve is already named by the Y label; a legend for it
+            # would only cover data.
+            self.curve_ax.legend(fontsize=7, loc="best")
 
         show_derivative = self.derivative_btn.isChecked()
-        self.curve_item.getAxis("right").setStyle(showValues=show_derivative)
-        self.curve_item.getAxis("right").setLabel(
-            f"d/d{x_field}" if show_derivative else None
-        )
+        self.deriv_ax.set_visible(show_derivative)
         if show_derivative:
             for index, (label, x, y) in enumerate(curves):
                 if x.size < 2:
                     continue
                 with np.errstate(divide="ignore", invalid="ignore"):
                     dy_dx = np.gradient(y, x)
-                finite = np.isfinite(dy_dx)
                 color = CURVE_COLORS[index % len(CURVE_COLORS)]
-                item = pg.PlotDataItem(
-                    x[finite], dy_dx[finite],
-                    pen=pg.mkPen(color, width=1, style=QtCore.Qt.DashLine),
-                )
-                self.deriv_vb.addItem(item)
-                self._derivative_items.append(item)
-            self.deriv_vb.enableAutoRange(axis=pg.ViewBox.YAxis)
-        self._sync_derivative_view()
+                self.deriv_ax.plot(x, dy_dx, color=color, lw=1, ls="--")
+            self.deriv_ax.set_ylabel(f"d/d{x_field}")
+            self.deriv_ax.relim()
+            self.deriv_ax.autoscale_view()
 
-        # Auto-range unless the user had zoomed this same view, in which case
-        # the range they chose is put back.
-        if prev_xlim is None and prev_ylim is None:
-            self.curve_vb.enableAutoRange()
-        else:
-            if prev_xlim is None:
-                self.curve_vb.enableAutoRange(axis=pg.ViewBox.XAxis)
-            else:
-                self.curve_vb.setXRange(*prev_xlim, padding=0)
-            if prev_ylim is None:
-                self.curve_vb.enableAutoRange(axis=pg.ViewBox.YAxis)
-            else:
-                self.curve_vb.setYRange(*prev_ylim, padding=0)
-        # Enabling auto-range only queues the recompute, so the view still
-        # reads as the old one until Qt gets round to it. Resolve it here, so
-        # a redraw leaves the range it is going to settle on.
-        self.curve_vb.updateAutoRange()
+        # Autoscale unless the user had zoomed this same view, in which
+        # case the range they chose is put back.
+        if prev_xlim is not None:
+            self.curve_ax.set_xlim(prev_xlim)
+        if prev_ylim is not None:
+            self.curve_ax.set_ylim(prev_ylim)
+
+        def report(x, y):
+            text = f"{x_field or 'x'}={x:.6g}   y={y:.6g}"
+            if show_derivative:
+                # The pointer is over the left axis; say what that height
+                # is on the right one too, which is the question a twin
+                # axis always provokes.
+                low, high = self.curve_ax.get_ylim()
+                other_low, other_high = self.deriv_ax.get_ylim()
+                if high > low:
+                    scaled = other_low + (y - low) / (high - low) * (
+                        other_high - other_low)
+                    text += f"   d/dx={scaled:.6g}"
+            return text
+
+        self.curve_ax.format_coord = report
+        self.curve_figure.tight_layout()
+        self.curve_canvas.draw_idle()
 
         self._last_curves = curves
         self._update_stats_table(stats_rows)
         self._draw_trend(paths, x_field, y_fields, monitor_field)
 
-    def _sync_derivative_view(self):
-        """Keep the derivative's view box on top of the main one."""
-        self.deriv_vb.setGeometry(self.curve_vb.sceneBoundingRect())
-        self.deriv_vb.linkedViewChanged(self.curve_vb, self.deriv_vb.XAxis)
-
     def _clear_curves(self):
         """Empty the curve page, legend and derivative overlay alike."""
-        self.curve_item.clear()
-        for item in self._derivative_items:
-            self.deriv_vb.removeItem(item)
-        self._derivative_items = []
-        legend = self.curve_item.legend
-        if legend is not None:
-            legend.clear()
-        self.curve_item.setTitle(None)
-
-    def _on_curve_mouse_moved(self, event):
-        """Report the pointer, the way the matplotlib readout does."""
-        if self.plot_stack.currentIndex() != 0:
-            return
-        pos = event[0]
-        if not self.curve_item.sceneBoundingRect().contains(pos):
-            self.coord_label.setText("")
-            return
-        point = self.curve_vb.mapSceneToView(pos)
-        text = f"{self._x_field() or 'x'}={point.x():.6g}   y={point.y():.6g}"
-        if self.derivative_btn.isChecked() and self._derivative_items:
-            other = self.deriv_vb.mapSceneToView(pos)
-            text += f"   d/dx={other.y():.6g}"
-        self.coord_label.setText(text)
+        self.curve_ax.clear()
+        self.deriv_ax.clear()
+        self.deriv_ax.set_visible(False)
 
     def _plot_grid(self, paths, grid, value_field, monitor_field, prev_xlim, prev_ylim):
         """Draw a two-motor raster as a colour map with a scale bar."""
@@ -1434,12 +1375,14 @@ class HdfViewer(QtWidgets.QMainWindow):
             # alone after, so a width chosen by hand survives a redraw.
             width = max(self._plot_splitter.width(), 600)
             self._plot_splitter.setSizes([int(width * 0.62), int(width * 0.38)])
-        self.trend_item.clear()
+        self.trend_ax.clear()
         shape = self.fit_combo.currentText()
         if shape == FIT_NONE or len(paths) < 2:
-            self.trend_item.setTitle(
+            self.trend_ax.set_title(
                 "Choose a fit shape" if shape == FIT_NONE
-                else "Select two or more scans")
+                else "Select two or more scans", fontsize=9)
+            self.trend_figure.tight_layout()
+            self.trend_canvas.draw_idle()
             return
         self._refresh_trend_axes(paths)
         choices = self._refresh_trend_quantities()
@@ -1493,18 +1436,20 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.trend_export_btn.setEnabled(bool(drawn))
         for index, (name, x_values, y_values) in enumerate(drawn):
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
-            self.trend_item.plot(
-                x_values, y_values, name=name,
-                pen=pg.mkPen(color, width=1), symbol="o", symbolSize=6,
-                symbolPen=pg.mkPen(color), symbolBrush=pg.mkBrush(color))
-        self.trend_item.setLabel("bottom", against)
-        self.trend_item.setLabel("left", self.trend_y_combo.currentText())
+            self.trend_ax.plot(x_values, y_values, label=name, color=color,
+                               lw=1, marker="o", ms=5)
+        self.trend_ax.set_xlabel(against)
+        self.trend_ax.set_ylabel(self.trend_y_combo.currentText())
+        self.trend_ax.grid(True, alpha=GRID_ALPHA)
+        if len(drawn) > 1:
+            self.trend_ax.legend(fontsize=7, loc="best")
         fitted = sum(len(v) for v in series.values())
         title = f"{fitted} fitted point(s) of {len(paths) * len(y_fields)}"
         if skipped:
             title += f"   [{skipped} with no {against}]"
-        self.trend_item.setTitle(title, size="9pt")
-        self.trend_item.getViewBox().enableAutoRange()
+        self.trend_ax.set_title(title, fontsize=9)
+        self.trend_figure.tight_layout()
+        self.trend_canvas.draw_idle()
 
     def _export_trend(self):
         """Write the trend's points, with the fit they came from."""
