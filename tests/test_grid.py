@@ -265,3 +265,28 @@ def test_loaded_grids_notices_a_file_that_changed():
         assert held.get(d / "gone.vti") is None
         held.put(d / "gone.vti", "nothing", cells=1)
         assert held.get(d / "gone.vti") is None
+
+
+def test_table_columns_share_an_x_only_when_the_array_is_shared():
+    from da6idb import export
+    x = np.linspace(0.0, 1.0, 5)
+    # three detectors of one scan: read once, handed to each field
+    cols = export.table_columns(
+        [("det1", x, x * 2), ("det2", x, x * 3), ("det3", x, x * 4)], "psic_eta")
+    assert list(cols) == ["psic_eta", "det1", "det2", "det3"]
+
+    # a second scan with identical values is still its own sampling
+    twin = np.linspace(0.0, 1.0, 5)
+    cols = export.table_columns([("a", x, x), ("b", twin, twin)], "psic_eta")
+    assert list(cols) == ["psic_eta", "a", "psic_eta_2", "b"]
+
+    # an averaged curve's X carries a NaN pad, so it is not equal to itself;
+    # identity still collapses its own fields together
+    padded = np.r_[x, np.nan]
+    cols = export.table_columns(
+        [("p", padded, padded), ("q", padded, padded)], "psic_eta")
+    assert list(cols) == ["psic_eta", "p", "q"]
+
+    # two curves of the same name do not overwrite one another
+    cols = export.table_columns([("same", x, x), ("same", twin, twin)], "e")
+    assert list(cols) == ["e", "same", "e_2", "same_2"]

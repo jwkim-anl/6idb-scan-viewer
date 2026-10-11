@@ -102,7 +102,7 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 142 callables, 10 classes across
+    Version 0.1.0.dev0 · 143 callables, 10 classes across
     14 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
@@ -118,7 +118,7 @@
   <nav><ul>
 <li><a class="m" href="#da6idb-batch">da6idb.batch</a><div class="sub"><a class="n" href="#da6idb-batch-expand-scans">expand_scans</a><a class="n" href="#da6idb-batch-parse-scans">parse_scans</a><a class="n" href="#da6idb-batch-find-scans">find_scans</a><a class="n" href="#da6idb-batch-grid-scans">grid_scans</a></div></li>
 <li><a class="m" href="#da6idb-combine">da6idb.combine</a><div class="sub"><a class="n" href="#da6idb-combine-baseline-values">baseline_values</a><a class="n" href="#da6idb-combine-collect-uniques">collect_uniques</a><a class="n" href="#da6idb-combine-scan-signature">scan_signature</a><a class="n" href="#da6idb-combine-sample-atol">sample_atol</a><a class="n" href="#da6idb-combine-scan-groups">scan_groups</a><a class="n" href="#da6idb-combine-curve-step">curve_step</a><a class="n" href="#da6idb-combine-same-grid">same_grid</a><a class="n" href="#da6idb-combine-stack-mean">stack_mean</a><a class="n" href="#da6idb-combine-combine-curves">combine_curves</a><a class="n" href="#da6idb-combine-combine-name">combine_name</a></div></li>
-<li><a class="m" href="#da6idb-export">da6idb.export</a><div class="sub"><a class="n" href="#da6idb-export-slug">slug</a><a class="n" href="#da6idb-export-suffix-for">suffix_for</a><a class="n" href="#da6idb-export-write-matrix">write_matrix</a><a class="n" href="#da6idb-export-write-columns">write_columns</a><a class="n" href="#da6idb-export-write-dataarray">write_dataarray</a></div></li>
+<li><a class="m" href="#da6idb-export">da6idb.export</a><div class="sub"><a class="n" href="#da6idb-export-slug">slug</a><a class="n" href="#da6idb-export-suffix-for">suffix_for</a><a class="n" href="#da6idb-export-write-matrix">write_matrix</a><a class="n" href="#da6idb-export-table-columns">table_columns</a><a class="n" href="#da6idb-export-write-columns">write_columns</a><a class="n" href="#da6idb-export-write-dataarray">write_dataarray</a></div></li>
 <li><a class="m" href="#da6idb-files">da6idb.files</a><div class="sub"><a class="n" href="#da6idb-files-detector-files-from-metadata">detector_files_from_metadata</a><a class="n" href="#da6idb-files-image-path-for-master">image_path_for_master</a><a class="n" href="#da6idb-files-master-path-for-image">master_path_for_image</a><a class="n" href="#da6idb-files-read-master-rois">read_master_rois</a><a class="n" href="#da6idb-files-is-image-file">is_image_file</a><a class="n" href="#da6idb-files-resolve-image-file">resolve_image_file</a><a class="n" href="#da6idb-files-scan-number">scan_number</a><a class="n" href="#da6idb-files-scan-tags">scan_tags</a><a class="n" href="#da6idb-files-file-prefix">file_prefix</a><a class="n" href="#da6idb-files-list-hdf-files">list_hdf_files</a></div></li>
 <li><a class="m" href="#da6idb-fit">da6idb.fit</a><div class="sub"><a class="n" href="#da6idb-fit-peak-fit">peak_fit</a><a class="n" href="#da6idb-fit-fit-columns">fit_columns</a><a class="n" href="#da6idb-fit-peak-fit-multi">peak_fit_multi</a><a class="n" href="#da6idb-fit-peak-model">peak_model</a><a class="n" href="#da6idb-fit-peak-parts">peak_parts</a></div></li>
 <li><a class="m" href="#da6idb-hkl-convert">da6idb.hkl.convert</a><div class="sub"><a class="n" href="#da6idb-hkl-convert-build-converter">build_converter</a><a class="n" href="#da6idb-hkl-convert-frame-hkl">frame_hkl</a><a class="n" href="#da6idb-hkl-convert-HklCloud">HklCloud</a><a class="n" href="#da6idb-hkl-convert-convert">convert</a></div></li>
@@ -230,6 +230,13 @@
       <article class="entry" id="da6idb-export-write-matrix" data-name="write_matrix a 2d array with its two axes. unmeasured cells are written as nan.">
         <h3><a href="#da6idb-export-write-matrix">write_matrix</a><span class="sig">(path, image, x, y, x_label=&#x27;x&#x27;, y_label=&#x27;y&#x27;, description=(), suffix=None)</span></h3>
         <div class="doc"><p>A 2D array with its two axes. Unmeasured cells are written as NaN.</p></div>
+      </article>
+      <article class="entry" id="da6idb-export-table-columns" data-name="table_columns ``{heading: values}`` for *curves*, laid out side by side.">
+        <h3><a href="#da6idb-export-table-columns">table_columns</a><span class="sig">(curves, x_label=&#x27;x&#x27;)</span></h3>
+        <div class="doc"><p><code>{heading: values}</code> for <em>curves</em>, laid out side by side.</p>
+<p><em>curves</em> is <code>[(label, x, y), ...]</code>. Curves drawn against the **same X array** share one X column between them, so three detectors of one scan come out as <code>psic_eta, det1, det2, det3</code> rather than as three repeats of the same angles.</p>
+<p>The same array, not merely equal values, and the difference matters. Two scans of one thing read their motor at two different moments and differ in the fifth decimal: those are two honest X columns. Comparing values would weld them together, would weld any two one-point scans, and would never collapse an averaged curve, whose X can carry a NaN pad and so is not even equal to itself. Reading a scan&#x27;s X once and handing the same array to each of its fields is what the caller already does, so identity answers exactly the question being asked -- were these drawn against one sampling.</p>
+<p>Columns come back at their own lengths; <code>write_columns</code> squares them off.</p></div>
       </article>
       <article class="entry" id="da6idb-export-write-columns" data-name="write_columns cuts as columns. returns the names written.">
         <h3><a href="#da6idb-export-write-columns">write_columns</a><span class="sig">(path, datasets, description=(), suffix=None, note_width=None)</span></h3>

@@ -67,6 +67,7 @@ import pyqtgraph as pg
 
 from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
 from da6idb import combine as _combine
+from da6idb import export as _export
 from da6idb import fit as _fit
 from da6idb.scan import (
     axis_edges,
@@ -211,6 +212,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._image_windows: list[ImageViewerWindow] = []
         self._syncing_fields = False
         self._colorbar = None
+        self._last_curves: list = []
         self._last_mode = ""
         self._x_is_auto = True
         self._manual_x = ""
@@ -404,6 +406,15 @@ class HdfViewer(QtWidgets.QMainWindow):
         )
         self.peaks_spin.valueChanged.connect(self._update_plot)
         axis_row.addWidget(self.peaks_spin)
+
+        self.export_btn = QtWidgets.QPushButton("Export curves…")
+        self.export_btn.setToolTip(
+            "Write what is plotted as columns: an X and a Y per curve, with\n"
+            "curves drawn against one sampling sharing their X column.\n"
+            "The header records which scans and settings produced it."
+        )
+        self.export_btn.clicked.connect(self._export_curves)
+        axis_row.addWidget(self.export_btn)
 
         self.clip_btn = QtWidgets.QPushButton("Clip map scale")
         self.clip_btn.setCheckable(True)
@@ -1161,6 +1172,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         # a redraw leaves the range it is going to settle on.
         self.curve_vb.updateAutoRange()
 
+        self._last_curves = curves
         self._update_stats_table(stats_rows)
 
     def _sync_derivative_view(self):
@@ -1271,6 +1283,42 @@ class HdfViewer(QtWidgets.QMainWindow):
         for column, text in enumerate(values):
             self.stats_table.setItem(0, column, QtWidgets.QTableWidgetItem(text))
         self.stats_table.resizeColumnsToContents()
+
+    def _export_curves(self):
+        """Write the plotted curves as columns, with their provenance."""
+        if not self._last_curves:
+            QtWidgets.QMessageBox.information(
+                self, "Nothing to export", "Plot some curves first.")
+            return
+        start = str((self._directory or Path(".")) / "curves.csv")
+        name, _filter = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export the plotted curves", start, _export.EXPORT_FILTERS)
+        if not name:
+            return
+        header = [
+            f"scans: {', '.join(p.name for p in self._selected_paths())}",
+            f"x: {self._x_field()}",
+        ]
+        if self._monitor_field():
+            header.append(f"normalised by: {self._monitor_field()}")
+        if self.average_btn.isChecked():
+            header.append("repeats averaged")
+        if self.fit_combo.currentText() != FIT_NONE:
+            header.append(f"fit: {self.fit_combo.currentText()}, "
+                          f"{self.peaks_spin.value()} peak(s)")
+        try:
+            written = _export.write_columns(
+                name,
+                [("curves", "", _export.table_columns(
+                    self._last_curves, self._x_field() or "x"))],
+                description=header,
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Export failed", f"{type(exc).__name__}: {exc}")
+            return
+        self.statusBar().showMessage(
+            "Wrote " + ", ".join(str(w) for w in written), 8000)
 
     def _average_repeats(self, curves, paths):
         """Collapse each set of repeats into one curve, per Y field.

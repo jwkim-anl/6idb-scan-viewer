@@ -84,6 +84,62 @@ def write_matrix(path, image, x, y, x_label="x", y_label="y",
     return path
 
 
+# What a save dialog offers, in the order the writers below handle them.
+# Here rather than in a window, so every window that exports agrees.
+EXPORT_FILTERS = (
+    "Text, columns or matrix (*.txt *.dat)"
+    ";;CSV (*.csv)"
+    ";;NumPy archive (*.npz)"
+    ";;HDF5 (*.h5 *.hdf5)"
+)
+
+
+def table_columns(curves, x_label="x"):
+    """``{heading: values}`` for *curves*, laid out side by side.
+
+    *curves* is ``[(label, x, y), ...]``. Curves drawn against the **same X
+    array** share one X column between them, so three detectors of one scan
+    come out as ``psic_eta, det1, det2, det3`` rather than as three repeats
+    of the same angles.
+
+    The same array, not merely equal values, and the difference matters.
+    Two scans of one thing read their motor at two different moments and
+    differ in the fifth decimal: those are two honest X columns. Comparing
+    values would weld them together, would weld any two one-point scans,
+    and would never collapse an averaged curve, whose X can carry a NaN pad
+    and so is not even equal to itself. Reading a scan's X once and handing
+    the same array to each of its fields is what the caller already does,
+    so identity answers exactly the question being asked -- were these
+    drawn against one sampling.
+
+    Columns come back at their own lengths; :func:`write_columns` squares
+    them off.
+    """
+    columns: dict[str, object] = {}
+    seen: dict[int, str] = {}
+    used: set[str] = set()
+
+    def unique(name):
+        if name not in used:
+            used.add(name)
+            return name
+        for n in range(2, 1000):
+            candidate = f"{name}_{n}"
+            if candidate not in used:
+                used.add(candidate)
+                return candidate
+        return name
+
+    for label, x, y in curves:
+        key = id(x)
+        if key not in seen:
+            heading = unique(x_label if not seen else f"{x_label}_{len(seen) + 1}")
+            seen[key] = heading
+            columns[heading] = x
+        columns[unique(label)] = y
+    return columns
+
+
 def write_columns(path, datasets, description=(), suffix=None, note_width=None):
     """Cuts as columns. Returns the names written.
 

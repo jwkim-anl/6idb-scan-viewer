@@ -57,6 +57,7 @@ Writing a slice or a cut out to a file.
 - `slug(text)` — A label that is safe in a file name or an HDF5 key.
 - `suffix_for(path, selected='')` — Which writer to use: the extension if it says, else the chosen filter.
 - `write_matrix(path, image, x, y, x_label='x', y_label='y', description=(), suffix=None)` — A 2D array with its two axes. Unmeasured cells are written as NaN.
+- `table_columns(curves, x_label='x')` — ``{heading: values}`` for *curves*, laid out side by side.
 - `write_columns(path, datasets, description=(), suffix=None, note_width=None)` — Cuts as columns. Returns the names written.
 - `write_dataarray(array, path, description=())` — Write a 2D :class:`xarray.DataArray`, taking its axes from the coords.
 
@@ -253,4 +254,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 142 callables, 10 classes -->
+<!-- 143 callables, 10 classes -->

@@ -29,6 +29,7 @@ from matplotlib.figure import Figure
 import matplotlib.patheffects as pe
 
 from da6idb import export
+from da6idb.export import EXPORT_FILTERS
 from da6idb.hkl.slice import MAX_PIXELS, _axis_index, sample_plane
 from volume_style import AXIS_NAMES
 from volume_style import spin as _spin
@@ -43,12 +44,6 @@ LOG_DECADES = 5
 # What the save dialog offers. Plain text and CSV are the lowest common
 # denominator; .npz is what a Python session wants; HDF5 is what the rest of
 # the beamline speaks.
-EXPORT_FILTERS = (
-    "Text, columns or matrix (*.txt *.dat)"
-    ";;CSV (*.csv)"
-    ";;NumPy archive (*.npz)"
-    ";;HDF5 (*.h5 *.hdf5)"
-)
 
 CUT_NONE = "No cuts"
 CUT_AXES = "Along the axes"
