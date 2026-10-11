@@ -250,14 +250,24 @@ ROI_COLORS = [
 ]
 
 # Curve colours for the per-file traces in a shared ROI plot.
+#
+# Dark and saturated, for a white plot background. They used to be the
+# pale set above, which reads on black and washes out on white -- and the
+# background is white whenever this window was opened from the scan
+# viewer, because pyqtgraph's background is a process-wide setting and
+# that module sets it at import. The plots below now say which background
+# they want rather than inheriting whichever module got imported first,
+# so these only ever have to suit the one.
 FILE_COLORS = [
-    (255, 220, 60),
-    (90, 200, 255),
-    (255, 120, 120),
-    (140, 230, 140),
-    (220, 150, 255),
-    (255, 175, 80),
+    (20, 50, 150),       # dark blue
+    (190, 40, 40),
+    (20, 110, 50),
+    (130, 50, 160),
+    (200, 110, 0),
+    (20, 120, 140),
 ]
+PLOT_BACKGROUND = "w"
+PLOT_FOREGROUND = "k"
 
 
 class ContextRectROI(pg.RectROI):
@@ -803,9 +813,18 @@ class RoiPlotDock(_RoiDockBase):
         self.plot_item = pg.PlotItem()
         self.plot_item.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget = pg.PlotWidget(plotItem=self.plot_item)
+        # Said here, not left to pyqtgraph's global setting: that is shared
+        # with every other module in the process, so the colours below would
+        # otherwise depend on whether the scan viewer had been imported.
+        self.plot_widget.setBackground(PLOT_BACKGROUND)
+        self.plot_item.getAxis("bottom").setPen(PLOT_FOREGROUND)
+        self.plot_item.getAxis("left").setPen(PLOT_FOREGROUND)
+        self.plot_item.getAxis("bottom").setTextPen(PLOT_FOREGROUND)
+        self.plot_item.getAxis("left").setTextPen(PLOT_FOREGROUND)
         layout.addWidget(self.plot_widget, 1)
 
-        self.frame_line = pg.InfiniteLine(angle=90, movable=True, pen="c")
+        self.frame_line = pg.InfiniteLine(
+            angle=90, movable=True, pen=pg.mkPen((80, 80, 80), width=1))
         self.plot_item.addItem(self.frame_line)
 
         # Kept visible in Single frame mode too -- that is the mode where
@@ -1065,11 +1084,17 @@ class Roi2DPlotDock(_RoiDockBase):
         self.plot_widget = pg.PlotWidget()
         self.plot_item = self.plot_widget.getPlotItem()
         self.plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_widget.setBackground(PLOT_BACKGROUND)
+        for edge in ("bottom", "left"):
+            self.plot_item.getAxis(edge).setPen(PLOT_FOREGROUND)
+            self.plot_item.getAxis(edge).setTextPen(PLOT_FOREGROUND)
         layout.addWidget(self.plot_widget, 1)
 
         self.scatter = pg.ScatterPlotItem(size=8, pen=pg.mkPen(None))
+        # Black, not white: the ring marks the selected point and on a
+        # white background a white ring is not there at all.
         self.highlight = pg.ScatterPlotItem(
-            size=14, pen=pg.mkPen("w", width=2), brush=pg.mkBrush(None)
+            size=14, pen=pg.mkPen("k", width=2), brush=pg.mkBrush(None)
         )
         self.plot_item.addItem(self.scatter)
         self.plot_item.addItem(self.highlight)
