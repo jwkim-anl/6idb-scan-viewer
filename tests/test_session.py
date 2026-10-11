@@ -428,3 +428,65 @@ def test_cut_between_two_hkl_points():
     # a cut that leaves the measured volume is NaN there, not an error
     away = hkl.cut((5.0, 5.0, 5.0), (5.1, 5.0, 5.0))
     assert away["intensity"].isna().all()
+
+
+def test_the_lattice_is_held_between_slices():
+    """Sweeping planes must not re-read the whole .vti for each one."""
+    if not have_example():
+        return
+    import time
+    hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+    hkl.grid(oversample=6.0)
+    held = hkl._cube_cache
+    assert held is not None
+
+    start = time.perf_counter()
+    for offset in np.linspace(-0.02, 0.02, 8):
+        hkl.slice(normal=(0, 0, 1), offset=float(offset))
+    swept = time.perf_counter() - start
+    # the same object served every plane, and nothing was read again
+    assert hkl._cube_cache[0] == held[0]
+    assert hkl._cube_cache[3] is held[3]
+    assert swept < 8 * 0.5, f"a sweep of 8 planes took {swept:.2f}s"
+
+
+def test_a_held_lattice_is_dropped_when_it_should_be():
+    if not have_example():
+        return
+    from da6idb.hkl import grid as _g
+    with Sandbox() as d:
+        hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+        out = d / "held.vti"
+        box = (1.00, 1.08, -0.55, -0.45, 7.45, 7.60)
+        hkl.grid(hkl_range=box, step=0.003, output=out)
+        first = float(hkl.slice(normal=(0, 0, 1), offset=0.0).max())
+
+        # another process regrids the same file: the next slice must see it
+        cube = _g.load_vti(out)
+        cube.point_data["intensity"] = np.asarray(
+            cube.point_data["intensity"]) * 2.0
+        cube.save(str(out))
+        assert np.isclose(
+            float(hkl.slice(normal=(0, 0, 1), offset=0.0).max()), 2 * first)
+
+        # and reuse=False goes back to the data, not to either of those
+        assert np.isclose(
+            float(hkl.slice(normal=(0, 0, 1), offset=0.0, reuse=False).max()),
+            first)
+
+        # a different lattice is not served from the held one
+        other = hkl.grid(hkl_range=box, step=0.006, output=d / "other.vti")
+        assert other.shape != hkl.grid(hkl_range=box, step=0.003,
+                                       output=out).shape
+
+
+def test_a_returned_grid_belongs_to_the_caller():
+    """It used to be a view on the file's buffer; now the cube is held."""
+    if not have_example():
+        return
+    hkl = da6idb.open_scan(EXAMPLE_MASTER).hkl()
+    cube = hkl.grid(oversample=6.0)
+    before = float(hkl.slice(normal=(0, 0, 1), offset=0.0).max())
+    cube[:] = -999.0
+    assert np.isclose(float(hkl.slice(normal=(0, 0, 1), offset=0.0).max()),
+                      before)

@@ -493,7 +493,10 @@ def to_xarray(grid, name: str = "intensity"):
     dims = tuple(int(n) for n in grid.dimensions)
     origin = np.asarray(grid.origin, dtype=float)
     spacing = np.asarray(grid.spacing, dtype=float)
-    values = np.asarray(grid.point_data[name]).reshape(dims, order="F")
+    # A copy, not a reshape of the grid's own buffer: the caller is handed
+    # something it may edit, and the grid it came from may be held and
+    # reused for the next slice.
+    values = np.array(np.asarray(grid.point_data[name]).reshape(dims, order="F"))
     coords = {
         axis: origin[i] + np.arange(dims[i]) * spacing[i]
         for i, axis in enumerate(("H", "K", "L"))

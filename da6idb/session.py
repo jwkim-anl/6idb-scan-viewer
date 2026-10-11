@@ -554,6 +554,53 @@ class HklMap:
         # What grid() was last asked for, so slice() cuts the grid you made
         # rather than quietly building a second one at full resolution.
         self._lattice: dict = {}
+        # And the lattice itself, so sweeping planes does not re-read it.
+        self._cube_cache: tuple | None = None
+
+    @staticmethod
+    def _stamp(path):
+        """What tells us a ``.vti`` on disk is still the one we read."""
+        try:
+            info = Path(path).stat()
+        except OSError:
+            return None
+        return (info.st_mtime_ns, info.st_size)
+
+    def _cube(self, settings):
+        """``(lattice, path)`` for *settings*, kept in memory between calls.
+
+        Every slice and every cut used to read the whole ``.vti`` back off
+        disk -- 1.4 s for the 94 MB grid of one rocking curve, paid again on
+        every plane of a sweep, which made sweeping cost a hundred times what
+        the arithmetic does.
+
+        One lattice is held per map, the last one asked for, so the memory
+        this costs is bounded by the largest grid in play rather than by how
+        many planes you cut from it.
+
+        The file stays the cache of record. This only skips re-reading it
+        when nothing has changed, which a stat answers: regrid from a viewer
+        or another process and the timestamp moves, so the next call reads
+        the new one. Asking for a different lattice, or passing
+        ``reuse=False``, also goes back to the file.
+        """
+        settings = dict(settings)
+        # reuse says whether to rebuild, not which lattice is wanted, so it
+        # decides whether to trust what is held -- it is not part of its
+        # identity. Leaving it in the key made grid() and slice() disagree
+        # about the same lattice, and the first slice after a grid always
+        # read the file again.
+        fresh = settings.pop("reuse", True) is False
+        key = repr(sorted((k, repr(v)) for k, v in settings.items()))
+        if not fresh and self._cube_cache is not None:
+            seen, path, stamp, cube = self._cube_cache
+            if seen == key and stamp is not None and self._stamp(path) == stamp:
+                return cube, path
+        cube, path, _made = _grid.ensure_grid(
+            self.path, self.master, geometry=self.geometry,
+            reuse=not fresh, **settings)
+        self._cube_cache = (key, Path(path), self._stamp(path), cube)
+        return cube, Path(path)
 
     def sources(self) -> pd.Series:
         """Where each piece of the geometry came from."""
@@ -593,9 +640,7 @@ class HklMap:
         """
         self._lattice = dict(hkl_range=hkl_range, oversample=oversample,
                              output=output, **kwargs)
-        cube, path, _made = _grid.ensure_grid(
-            self.path, self.master, hkl_range=hkl_range, oversample=oversample,
-            output=output, reuse=reuse, geometry=self.geometry, **kwargs)
+        cube, path = self._cube({**self._lattice, "reuse": reuse})
         array = _grid.to_xarray(cube)
         array.attrs["path"] = str(path)
         return array
@@ -620,9 +665,7 @@ class HklMap:
         """
         import xarray as xr
 
-        settings = {**self._lattice, **kwargs}
-        cube, _path, _made = _grid.ensure_grid(
-            self.path, self.master, geometry=self.geometry, **settings)
+        cube, _path = self._cube({**self._lattice, **kwargs})
         normal = np.asarray(normal, dtype=float)
         normal = normal / np.linalg.norm(normal)
         origin, offset = _slice.plane_origin(
@@ -659,9 +702,7 @@ class HklMap:
         Returns one row per sample: distance from *start*, the H, K, L
         there, and the intensity, NaN where the scan did not reach.
         """
-        settings = {**self._lattice, **kwargs}
-        cube, _path, _made = _grid.ensure_grid(
-            self.path, self.master, geometry=self.geometry, **settings)
+        cube, _path = self._cube({**self._lattice, **kwargs})
         distance, points, values = _slice.line_cut(
             cube, start, end, samples=samples, width=width, normal=normal)
         frame = pd.DataFrame({
