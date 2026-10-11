@@ -102,8 +102,8 @@
 <header><div class="wrap">
   <h1><code>da6idb</code> — every public function</h1>
   <p class="meta">
-    Version 0.1.0.dev0 · 122 callables, 10 classes across
-    12 modules · generated from the source on 2026-10-11 by
+    Version 0.1.0.dev0 · 127 callables, 10 classes across
+    13 modules · generated from the source on 2026-10-11 by
     <code>python docs/make_api_html.py</code>
   </p>
   <p class="meta">
@@ -119,6 +119,7 @@
 <li><a class="m" href="#da6idb-batch">da6idb.batch</a><div class="sub"><a class="n" href="#da6idb-batch-expand-scans">expand_scans</a><a class="n" href="#da6idb-batch-parse-scans">parse_scans</a><a class="n" href="#da6idb-batch-find-scans">find_scans</a><a class="n" href="#da6idb-batch-grid-scans">grid_scans</a></div></li>
 <li><a class="m" href="#da6idb-export">da6idb.export</a><div class="sub"><a class="n" href="#da6idb-export-slug">slug</a><a class="n" href="#da6idb-export-suffix-for">suffix_for</a><a class="n" href="#da6idb-export-write-matrix">write_matrix</a><a class="n" href="#da6idb-export-write-columns">write_columns</a><a class="n" href="#da6idb-export-write-dataarray">write_dataarray</a></div></li>
 <li><a class="m" href="#da6idb-files">da6idb.files</a><div class="sub"><a class="n" href="#da6idb-files-detector-files-from-metadata">detector_files_from_metadata</a><a class="n" href="#da6idb-files-image-path-for-master">image_path_for_master</a><a class="n" href="#da6idb-files-master-path-for-image">master_path_for_image</a><a class="n" href="#da6idb-files-read-master-rois">read_master_rois</a><a class="n" href="#da6idb-files-is-image-file">is_image_file</a><a class="n" href="#da6idb-files-resolve-image-file">resolve_image_file</a><a class="n" href="#da6idb-files-scan-number">scan_number</a><a class="n" href="#da6idb-files-file-prefix">file_prefix</a><a class="n" href="#da6idb-files-list-hdf-files">list_hdf_files</a></div></li>
+<li><a class="m" href="#da6idb-fit">da6idb.fit</a><div class="sub"><a class="n" href="#da6idb-fit-peak-fit">peak_fit</a><a class="n" href="#da6idb-fit-fit-columns">fit_columns</a><a class="n" href="#da6idb-fit-peak-fit-multi">peak_fit_multi</a><a class="n" href="#da6idb-fit-peak-model">peak_model</a><a class="n" href="#da6idb-fit-peak-parts">peak_parts</a></div></li>
 <li><a class="m" href="#da6idb-hkl-convert">da6idb.hkl.convert</a><div class="sub"><a class="n" href="#da6idb-hkl-convert-build-converter">build_converter</a><a class="n" href="#da6idb-hkl-convert-frame-hkl">frame_hkl</a><a class="n" href="#da6idb-hkl-convert-HklCloud">HklCloud</a><a class="n" href="#da6idb-hkl-convert-convert">convert</a></div></li>
 <li><a class="m" href="#da6idb-hkl-detector">da6idb.hkl.detector</a><div class="sub"><a class="n" href="#da6idb-hkl-detector-circle-delta">circle_delta</a><a class="n" href="#da6idb-hkl-detector-detector-basis">detector_basis</a><a class="n" href="#da6idb-hkl-detector-two-theta-maps">two_theta_maps</a><a class="n" href="#da6idb-hkl-detector-two-theta-at">two_theta_at</a></div></li>
 <li><a class="m" href="#da6idb-hkl-geometry">da6idb.hkl.geometry</a><div class="sub"><a class="n" href="#da6idb-hkl-geometry-HklGeometry">HklGeometry</a><a class="n" href="#da6idb-hkl-geometry-setup-path">setup_path</a><a class="n" href="#da6idb-hkl-geometry-read-setup">read_setup</a><a class="n" href="#da6idb-hkl-geometry-apply-setup">apply_setup</a><a class="n" href="#da6idb-hkl-geometry-write-setup">write_setup</a><a class="n" href="#da6idb-hkl-geometry-setup-differences">setup_differences</a><a class="n" href="#da6idb-hkl-geometry-read-transmission">read_transmission</a><a class="n" href="#da6idb-hkl-geometry-read-geometry">read_geometry</a></div></li>
@@ -228,6 +229,46 @@
       <article class="entry" id="da6idb-files-list-hdf-files" data-name="list_hdf_files return the hdf5 files directly inside *directory*, sorted by name.">
         <h3><a href="#da6idb-files-list-hdf-files">list_hdf_files</a><span class="sig">(directory)</span></h3>
         <div class="doc"><p>Return the HDF5 files directly inside <em>directory</em>, sorted by name.</p></div>
+      </article>
+    </section>
+
+    <section class="module" id="da6idb-fit">
+      <h2><a href="#da6idb-fit">da6idb.fit</a></h2>
+      <p class="lead">Fitting a peak, or several, to one curve.</p>
+      
+      <article class="entry" id="da6idb-fit-peak-fit" data-name="peak_fit fit *shape* plus a sloping line to one curve.">
+        <h3><a href="#da6idb-fit-peak-fit">peak_fit</a><span class="sig">(x, y, shape, fwhm_seed=None)</span></h3>
+        <div class="doc"><p>Fit <em>shape</em> plus a sloping line to one curve.</p>
+<p>The model is <code>height * peak(x; center, fwhm) + slope * x + offset</code>, five parameters. The background is always sloping and never optional: on the rocking curves in TiSe2 (32 to 38) it runs 1754 counts down to 476 across scan 32 alone, and fitting it lifts the mean R2 of the whole curve from 0.957 to 0.980 for a Gaussian -- 0.976 for a flat offset, so it is the slope that is bought and not merely a pedestal. (Those three are measured against the raw curve, which is not how <code>fit_r2</code> below is reckoned; they compare background models, not fits.) <code>height</code> is measured above that line, which is why it comes out below the curve&#x27;s own maximum (46664 against 51863 on scan 32).</p>
+<p>Every value is <code>None</code> when no trustworthy fit came back, which the table shows as a blank row and the export writes as <code>(none)</code>. That happens a great deal more often than it might seem it should, and deliberately: see the gate below.</p>
+<p><em>fwhm_seed</em> is <code>curve_stats</code>&#x27; crossing width when it found one. It is passed in rather than recomputed because the caller has just worked it out for the same curve.</p></div>
+      </article>
+      <article class="entry" id="da6idb-fit-fit-columns" data-name="fit_columns the fit headings, the mixing&#x27;s among them only where it is fitted.">
+        <h3><a href="#da6idb-fit-fit-columns">fit_columns</a><span class="sig">(mixed)</span></h3>
+        <div class="doc"><p>The fit headings, the mixing&#x27;s among them only where it is fitted.</p>
+<p>One function so that the headings and the cells under them cannot be built from two different ideas of the order -- <code>_set_stats_columns</code> and <code>_update_stats_table</code> both come here.</p></div>
+      </article>
+      <article class="entry" id="da6idb-fit-peak-fit-multi" data-name="peak_fit_multi fit *peaks* copies of *shape* over one shared sloping line.">
+        <h3><a href="#da6idb-fit-peak-fit-multi">peak_fit_multi</a><span class="sig">(x, y, shape, peaks)</span></h3>
+        <div class="doc"><p>Fit <em>peaks</em> copies of <em>shape</em> over one shared sloping line.</p>
+<p>The model is <code>sum(height_k * peak(x; centre_k, fwhm_k))</code> plus <code>slope * x + offset</code>: three parameters a component and two for the line, which the components share because one background under several peaks is what the data has.</p>
+<p>Beside the keys <code>peak_fit</code> fills, this adds <code>fit_peaks</code> -- a list of one row per component, **ordered by centre**. That ordering is what makes a trend across scans mean anything: &quot;peak 1&quot; is then always the leftmost, and its line follows the same physical peak through a set of repeats even where the two swap which is the taller.</p>
+<p>The four per-peak values on the returned dict itself stay <code>None</code>, so the curve&#x27;s own row shows five blank cells and the numbers appear on the peak rows underneath it. <code>fit_slope</code>/<code>fit_offset</code> are kept, because the shared line is what <code>peak_model</code> needs to draw the sum.</p>
+<p>Two things this cannot do, both measured and both in the tooltips.</p>
+<p>R2 cannot choose <em>peaks</em> for you. The models are nested, so it only ever rises: on scan 32, a single clean rocking curve, one peak scores 0.97832 and two score 0.99761.</p>
+<p>And a component too many does not announce itself by failing. Asked for two, a single peak is <em>divided</em> rather than fitted alongside a rejected spare, and the division need not be lopsided: scan 32 comes back as a broad base (FWHM 0.0914) under a sharp core (0.0347) at much the same place, and neither of those is the 0.0447 that one peak reports and that the crossings agree with. The derivative of a knife edge divides too -- scan 101 grows a negative component at -6.4542 and its main width moves 0.02095 to 0.02340, 12%, which is more than the drift the whole trend exists to show. Every component is therefore given a row of its own and the gate below stays geometric: a broad base is as sane a shape as a peak, and no test here can know it was not wanted.</p></div>
+      </article>
+      <article class="entry" id="da6idb-fit-peak-model" data-name="peak_model evaluate over *x* the fit ``peak_fit`` returned in *stats*.">
+        <h3><a href="#da6idb-fit-peak-model">peak_model</a><span class="sig">(x, shape, stats)</span></h3>
+        <div class="doc"><p>Evaluate over <em>x</em> the fit <code>peak_fit</code> returned in <em>stats</em>.</p>
+<p><code>None</code> when there is no fit to draw, so the caller can ask without checking first. Uses <code>.get</code> throughout because a row that was not the one fitted -- the curve while dY/dX is shown, the derivative while it is not -- and any colour map never carry these keys at all.</p>
+<p>A <code>peak_fit_multi</code> result is drawn as the one summed model its components make, not as a line apiece: they were fitted together over a single background, and several lines in one colour over one curve would read as several fits rather than one.</p></div>
+      </article>
+      <article class="entry" id="da6idb-fit-peak-parts" data-name="peak_parts the pieces the fit in *stats* is made of, for &quot;parts&quot; to draw.">
+        <h3><a href="#da6idb-fit-peak-parts">peak_parts</a><span class="sig">(x, shape, stats)</span></h3>
+        <div class="doc"><p>The pieces the fit in <em>stats</em> is made of, for &quot;Parts&quot; to draw.</p>
+<p>The fitted background first, then one line a component -- each drawn **on** that background rather than from zero, so a component lies where the data it is claiming lies. From zero they would be readable against each other and nowhere near the curve: scan 109&#x27;s background is about 800 counts, so every component would float a screen below its own peak.</p>
+<p>Empty where there is nothing to add to what <code>peak_model</code> already drew. A single-component fit is its background plus its one peak, so the component line would be the summed model over again, in the same colour, and only the background is worth a line of its own.</p></div>
       </article>
     </section>
 

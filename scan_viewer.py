@@ -66,6 +66,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from da6idb.files import file_prefix, list_hdf_files, resolve_image_file, scan_number
+from da6idb import fit as _fit
 from da6idb.scan import (
     axis_edges,
     curve_stats,
@@ -118,6 +119,11 @@ class SparseAxis(pg.AxisItem):
     def tickValues(self, minVal, maxVal, size):
         return super().tickValues(minVal, maxVal, size)[:GRID_LEVELS]
 
+
+FIT_NONE = "None"
+# What the statistics table always shows, before any fitted columns.
+STATS_COLUMNS = ["Curve", "Max Y", "@X (max)", "Min Y", "@X (min)",
+                 "Center", "FWHM"]
 
 CURVE_COLORS = (
     "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
@@ -370,6 +376,41 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.derivative_btn.setCheckable(True)
         self.derivative_btn.toggled.connect(self._update_plot)
         axis_row.addWidget(self.derivative_btn)
+
+        # Fitting. "None" rather than a tick, so the shape in use is always
+        # legible: a tick plus a shape box would say the same thing twice
+        # and could disagree.
+        axis_row.addWidget(QtWidgets.QLabel("Fit"))
+        self.fit_combo = QtWidgets.QComboBox()
+        self.fit_combo.addItem(FIT_NONE)
+        self.fit_combo.addItems(_fit.PEAK_SHAPES)
+        self.fit_combo.setToolTip(
+            "Fit this shape plus a sloping line to every plotted curve.\n"
+            "The background is always fitted, never assumed flat."
+        )
+        self.fit_combo.currentIndexChanged.connect(self._update_plot)
+        axis_row.addWidget(self.fit_combo)
+
+        self.peaks_spin = QtWidgets.QSpinBox()
+        self.peaks_spin.setRange(1, 4)
+        self.peaks_spin.setPrefix("peaks ")
+        self.peaks_spin.setToolTip(
+            "How many copies of the shape to fit over one shared background.\n"
+            "R2 cannot choose this for you -- the models are nested, so it\n"
+            "only ever rises. A component too many divides one peak rather\n"
+            "than failing, so each gets a row of its own to be judged."
+        )
+        self.peaks_spin.valueChanged.connect(self._update_plot)
+        axis_row.addWidget(self.peaks_spin)
+
+        self.fit_parts_btn = QtWidgets.QPushButton("Parts")
+        self.fit_parts_btn.setCheckable(True)
+        self.fit_parts_btn.setToolTip(
+            "Draw the fitted background and each component on it, as well\n"
+            "as the one summed model."
+        )
+        self.fit_parts_btn.toggled.connect(self._update_plot)
+        axis_row.addWidget(self.fit_parts_btn)
         layout.addLayout(axis_row)
 
         canvas_box = QtWidgets.QVBoxLayout()
@@ -443,10 +484,8 @@ class HdfViewer(QtWidgets.QMainWindow):
         layout.addWidget(canvas_widget, 1)
 
         layout.addWidget(QtWidgets.QLabel("Peak statistics (per plotted curve):"))
-        self.stats_table = QtWidgets.QTableWidget(0, 7)
-        self.stats_table.setHorizontalHeaderLabels(
-            ["Curve", "Max Y", "@X (max)", "Min Y", "@X (min)", "Center", "FWHM"]
-        )
+        self.stats_table = QtWidgets.QTableWidget(0, len(STATS_COLUMNS))
+        self.stats_table.setHorizontalHeaderLabels(STATS_COLUMNS)
         self.stats_table.horizontalHeader().setStretchLastSection(True)
         self.stats_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         # Half the height it used to take. Compact rows keep roughly the same
@@ -994,6 +1033,23 @@ class HdfViewer(QtWidgets.QMainWindow):
                 stats_rows.append((label, curve_stats(x, y)))
                 curves.append((label, x, y))
 
+        shape = self.fit_combo.currentText()
+        wanted = self.peaks_spin.value()
+        fits: list[dict | None] = []
+        if shape != FIT_NONE:
+            rows: list[tuple[str, dict]] = []
+            for (label, x, y), (_label, stats) in zip(curves, stats_rows):
+                got = (_fit.peak_fit(x, y, shape, stats.get("fwhm"))
+                       if wanted == 1 else
+                       _fit.peak_fit_multi(x, y, shape, wanted))
+                fits.append(got)
+                rows.append((label, {**stats, **got}))
+                # A component has no curve of its own, so its row carries
+                # only what the fit says about it.
+                for number, part in enumerate(got.get("fit_peaks") or [], 1):
+                    rows.append((f"    peak {number}", part))
+            stats_rows = rows
+
         for index, (label, x, y) in enumerate(curves):
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
             self.curve_item.plot(
@@ -1005,6 +1061,24 @@ class HdfViewer(QtWidgets.QMainWindow):
                 # line at those rather than drawing through them.
                 connect="finite",
             )
+
+        for index, (got, (label, x, _y)) in enumerate(zip(fits, curves)):
+            if got is None:
+                continue
+            color = CURVE_COLORS[index % len(CURVE_COLORS)]
+            grid = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)),
+                               _fit.PEAK_FIT_PLOT_POINTS)
+            model = _fit.peak_model(grid, shape, got)
+            if model is None:
+                continue
+            self.curve_item.plot(grid, model,
+                                 pen=pg.mkPen(color, width=2))
+            if not self.fit_parts_btn.isChecked():
+                continue
+            for piece in _fit.peak_parts(grid, shape, got):
+                self.curve_item.plot(
+                    grid, piece,
+                    pen=pg.mkPen(color, width=1, style=QtCore.Qt.DotLine))
 
         self.curve_item.setTitle(None)
         self.curve_item.setLabel("bottom", x_field)
@@ -1157,17 +1231,31 @@ class HdfViewer(QtWidgets.QMainWindow):
         def fmt(value: float | None) -> str:
             return "" if value is None else f"{value:.6g}"
 
+        shape = self.fit_combo.currentText()
+        # The mixing gets a column only where the shape has one to report,
+        # so three shapes of the four do not carry a column of blanks.
+        fitted = ([] if shape == FIT_NONE
+                  else _fit.fit_columns(shape in _fit.PEAK_MIX))
+        keys = ["fit_center", "fit_fwhm", "fit_height", "fit_area", "fit_r2"]
+        if shape in _fit.PEAK_MIX and fitted:
+            keys.insert(2, "fit_eta")
+        headings = STATS_COLUMNS + fitted
+        if [self.stats_table.horizontalHeaderItem(c).text()
+                for c in range(self.stats_table.columnCount())] != headings:
+            self.stats_table.setColumnCount(len(headings))
+            self.stats_table.setHorizontalHeaderLabels(headings)
+
         self.stats_table.setRowCount(len(rows))
         for row, (label, stats) in enumerate(rows):
             values = [
                 label,
-                fmt(stats["max_y"]),
-                fmt(stats["max_x"]),
-                fmt(stats["min_y"]),
-                fmt(stats["min_x"]),
-                fmt(stats["center"]),
-                fmt(stats["fwhm"]),
-            ]
+                fmt(stats.get("max_y")),
+                fmt(stats.get("max_x")),
+                fmt(stats.get("min_y")),
+                fmt(stats.get("min_x")),
+                fmt(stats.get("center")),
+                fmt(stats.get("fwhm")),
+            ] + [fmt(stats.get(key)) for key in keys[:len(fitted)]]
             for col, text in enumerate(values):
                 self.stats_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
         self.stats_table.resizeColumnsToContents()

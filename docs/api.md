@@ -13,6 +13,7 @@ pyvista.
 |---|---|
 | `da6idb.files` | finding a scan's files and pairing master with detector |
 | `da6idb.scan` | the master: metadata, streams, rasters, peak statistics |
+| `da6idb.fit` | peak shapes fitted to a curve, one or several |
 | `da6idb.images` | the detector stack, its channels and its stored ROIs |
 | `da6idb.rois` | rectangles, and what they reduce each frame to |
 | `da6idb.hkl.geometry` | the instrument description, overrides, attenuator |
@@ -56,6 +57,16 @@ Finding the files a scan is made of, and pairing them up.
 - `scan_number(path)` — The scan number in a file name: ``00008`` from ``tise2_2_00008_master.hdf``.
 - `file_prefix(path)` — The part of a file name in front of the scan number: ``tise2_2``.
 - `list_hdf_files(directory)` — Return the HDF5 files directly inside *directory*, sorted by name.
+
+### `da6idb.fit`
+
+Fitting a peak, or several, to one curve.
+
+- `peak_fit(x, y, shape, fwhm_seed=None)` — Fit *shape* plus a sloping line to one curve.
+- `fit_columns(mixed)` — The fit headings, the mixing's among them only where it is fitted.
+- `peak_fit_multi(x, y, shape, peaks)` — Fit *peaks* copies of *shape* over one shared sloping line.
+- `peak_model(x, shape, stats)` — Evaluate over *x* the fit ``peak_fit`` returned in *stats*.
+- `peak_parts(x, shape, stats)` — The pieces the fit in *stats* is made of, for "Parts" to draw.
 
 ### `da6idb.hkl.convert`
 
@@ -221,4 +232,4 @@ The objects a notebook starts from.
   - `.slice(self, normal=(0, 0, 1), offset=0.0, point=None, layers=1, **kwargs)` — A plane through the grid, as a labelled 2D array.
   - `.cut(self, start, end, samples=None, width=1, normal=None, **kwargs)` — Intensity along the line between two H, K, L points.
 
-<!-- 122 callables, 10 classes -->
+<!-- 127 callables, 10 classes -->
