@@ -125,6 +125,7 @@ class SparseAxis(pg.AxisItem):
 
 
 FIT_NONE = "None"
+AVERAGE_NONE, AVERAGE_REPEATS, AVERAGE_ALL = "None", "Repeats", "All selected"
 # What the statistics table always shows, before any fitted columns.
 STATS_COLUMNS = ["Curve", "Max Y", "@X (max)", "Min Y", "@X (min)",
                  "Center", "FWHM"]
@@ -474,17 +475,20 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.clip_btn.toggled.connect(self._update_plot)
         axis_row.addWidget(self.clip_btn)
 
-        self.average_btn = QtWidgets.QPushButton("Average repeats")
-        self.average_btn.setCheckable(True)
-        self.average_btn.setToolTip(
-            "Average the scans in the selection that are one measurement\n"
-            "repeated -- same plan, same motors, same sample position and\n"
-            "temperature, same points. Scans that differ in any of those are\n"
-            "left as separate curves, so a series does not quietly average\n"
-            "into one clean curve that is not one measurement."
+        axis_row.addWidget(QtWidgets.QLabel("Average"))
+        self.average_combo = QtWidgets.QComboBox()
+        self.average_combo.addItems((AVERAGE_NONE, AVERAGE_REPEATS, AVERAGE_ALL))
+        self.average_combo.setToolTip(
+            "Repeats: average only the scans that agree on plan, motors,\n"
+            "sample position and temperature, so a series does not quietly\n"
+            "become one clean curve that is not one measurement.\n\n"
+            "All selected: average everything selected that shares a grid,\n"
+            "however far apart the baseline says they sat. For a long run\n"
+            "whose temperature drifts a little between repeats, which the\n"
+            "grouping reads as a series and splits."
         )
-        self.average_btn.toggled.connect(self._update_plot)
-        axis_row.addWidget(self.average_btn)
+        self.average_combo.currentIndexChanged.connect(self._update_plot)
+        axis_row.addWidget(self.average_combo)
 
         self.fit_parts_btn = QtWidgets.QPushButton("Parts")
         self.fit_parts_btn.setCheckable(True)
@@ -1144,7 +1148,7 @@ class HdfViewer(QtWidgets.QMainWindow):
                 stats_rows.append((label, curve_stats(x, y)))
                 curves.append((label, x, y, path, y_field))
 
-        if self.average_btn.isChecked() and len(paths) > 1:
+        if self.average_combo.currentText() != AVERAGE_NONE and len(paths) > 1:
             curves, stats_rows = self._average_repeats(curves, paths)
         curves = [(label, x, y) for label, x, y, *_rest in curves]
 
@@ -1553,8 +1557,8 @@ class HdfViewer(QtWidgets.QMainWindow):
         ]
         if self._monitor_field():
             header.append(f"normalised by: {self._monitor_field()}")
-        if self.average_btn.isChecked():
-            header.append("repeats averaged")
+        if self.average_combo.currentText() != AVERAGE_NONE:
+            header.append(f"averaged: {self.average_combo.currentText().lower()}")
         if self.fit_combo.currentText() != FIT_NONE:
             header.append(f"fit: {self.fit_combo.currentText()}, "
                           f"{self.peaks_spin.value()} peak(s)")
@@ -1582,9 +1586,16 @@ class HdfViewer(QtWidgets.QMainWindow):
         a step is left out rather than smeared into the mean.
         """
         rank = {str(path): index for index, path in enumerate(paths)}
-        groups = _combine.scan_groups(paths)
-        belongs = {str(path): number
-                   for number, group in enumerate(groups) for path in group}
+        if self.average_combo.currentText() == AVERAGE_ALL:
+            # Told outright that these are repeats. The grid check below
+            # still stands -- curves on different points cannot be averaged
+            # whoever says they are the same measurement -- but what the
+            # baseline says about where they sat no longer splits them.
+            belongs = {str(path): 0 for path in paths}
+        else:
+            belongs = {str(path): number
+                       for number, group in enumerate(_combine.scan_groups(paths))
+                       for path in group}
 
         pooled: dict[tuple, list] = {}
         for label, x, y, path, y_field in curves:
@@ -1600,10 +1611,14 @@ class HdfViewer(QtWidgets.QMainWindow):
                 out.append((label, x, y))
                 rows.append((label, curve_stats(x, y)))
                 continue
-            base_x = first[2]
-            kept = [m for m in members if _combine.same_grid(base_x, m[2])]
+            kept = [m for m in members if _combine.same_grid(first[2], m[2])]
             dropped = len(members) - len(kept)
             rows_n = max(m[2].size for m in kept)
+            # The X of the longest of them, not of the first: they agree
+            # over the overlap by construction, and the mean runs to the
+            # longest, so taking the first's would leave the curve's X
+            # short of its own Y whenever the first scan is the stopped one.
+            base_x = max((m[2] for m in kept), key=np.size)
             mean = _combine.stack_mean([m[3] for m in kept], rows_n)
             numbers = "+".join(scan_number(m[4]) for m in kept)
             label = f"{numbers}: {key[1]}"
