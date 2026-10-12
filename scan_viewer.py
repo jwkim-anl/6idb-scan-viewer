@@ -80,6 +80,7 @@ from da6idb.scan import (
     read_baseline,
     read_grid,
     read_primary,
+    read_scatter,
     read_scan_info,
     scan_hkl,
     scan_x_field,
@@ -1084,6 +1085,12 @@ class HdfViewer(QtWidgets.QMainWindow):
             # the curve plot and would otherwise leave the map button dead,
             # so the first is drawn and the title says it is the first.
             grid = read_grid(paths[0], y_fields[0], monitor_field)
+            if grid is None:
+                # A fly grid steps one axis and flies the other, so its
+                # points do not land on a lattice and read_grid refuses
+                # it -- rightly, since a lattice would have to invent
+                # where they were. Drawn from the positions recorded.
+                grid = read_scatter(paths[0], y_fields[0], monitor_field)
         self.grid_btn.setEnabled(grid is not None)
         if not self.grid_btn.isChecked():
             grid = None
@@ -1343,17 +1350,36 @@ class HdfViewer(QtWidgets.QMainWindow):
         """Draw a two-motor raster as a colour map with a scale bar."""
         label = value_field + (f" / {monitor_field}" if monitor_field else "")
 
-        x_edges, y_edges = axis_edges(grid["x"]), axis_edges(grid["y"])
         low = high = None
         extend = "neither"
         if self.clip_btn.isChecked():
             low, high, extend = clipped_limits(grid["z"])
-        mesh = self.ax.pcolormesh(x_edges, y_edges, grid["z"], shading="flat",
-                                  vmin=low, vmax=high)
+        if grid.get("scattered"):
+            # Triangulated between the points as they were measured, with
+            # the points themselves drawn over it: on a flown axis where
+            # they sit is a fact about the scan, not a detail to hide.
+            mesh = self.ax.tripcolor(grid["x"], grid["y"], grid["z"],
+                                     shading="gouraud", vmin=low, vmax=high)
+            self.ax.plot(grid["x"], grid["y"], ".", ms=2.4, color="k",
+                         alpha=0.5, lw=0)
+            # The points reach the edge of the measured area, where a
+            # lattice's cells reach half a step beyond their centres.
+            bounds_x = (float(np.min(grid["x"])), float(np.max(grid["x"])))
+            bounds_y = (float(np.min(grid["y"])), float(np.max(grid["y"])))
+        else:
+            x_edges, y_edges = axis_edges(grid["x"]), axis_edges(grid["y"])
+            mesh = self.ax.pcolormesh(x_edges, y_edges, grid["z"],
+                                      shading="flat", vmin=low, vmax=high)
+            bounds_x = (x_edges[0], x_edges[-1])
+            bounds_y = (y_edges[0], y_edges[-1])
 
         self.ax.set_xlabel(grid["x_name"])
         self.ax.set_ylabel(grid["y_name"])
-        title = f"{paths[0].name}  —  {len(grid['x'])} x {len(grid['y'])} grid"
+        if grid.get("scattered"):
+            title = (f"{paths[0].name}  —  {grid['points']} points, "
+                     "as measured")
+        else:
+            title = f"{paths[0].name}  —  {len(grid['x'])} x {len(grid['y'])} grid"
         if len(paths) > 1:
             # Two colour maps cannot share one pair of axes.
             title += f"   (first of {len(paths)} selected)"
@@ -1361,7 +1387,10 @@ class HdfViewer(QtWidgets.QMainWindow):
             title += f"   (showing {value_field})"
         missing = int(np.count_nonzero(~np.isfinite(grid["z"])))
         if missing:
-            title += f"   [{missing} point(s) not measured]"
+            # On a lattice this counts cells nobody visited; on a set of
+            # measured points it can only be a reading that came back NaN.
+            title += (f"   [{missing} unmeasured]" if grid.get("scattered")
+                      else f"   [{missing} point(s) not measured]")
         if low is not None:
             title += f"   [scale {low:.6g} to {high:.6g}]"
         self.ax.set_title(title, fontsize=9)
@@ -1370,18 +1399,38 @@ class HdfViewer(QtWidgets.QMainWindow):
         # Autoscale cannot be relied on here: pcolormesh adds a *collection*,
         # which relim() does not look at, so the X range was left at the empty
         # default while Y came out right. Set both ends from the cell edges.
-        self.ax.set_xlim(x_edges[0], x_edges[-1])
-        self.ax.set_ylim(y_edges[0], y_edges[-1])
+        self.ax.set_xlim(*bounds_x)
+        self.ax.set_ylim(*bounds_y)
         if prev_xlim is not None:
             self.ax.set_xlim(prev_xlim)
         if prev_ylim is not None:
             self.ax.set_ylim(prev_ylim)
         # Report the value under the pointer too. The stock readout gives
         # only x and y, so replace it outright rather than append to it.
+        scattered = bool(grid.get("scattered"))
+        if not scattered:
+            cell_x, cell_y = x_edges, y_edges
+
         def format_coord(x, y):
             parts = [f"{grid['x_name']}={x:.6g}", f"{grid['y_name']}={y:.6g}"]
-            column = int(np.searchsorted(x_edges, x) - 1)
-            row = int(np.searchsorted(y_edges, y) - 1)
+            if scattered:
+                # No cell to land in, so report the reading nearest the
+                # pointer and how far off it is -- on a flown axis the
+                # gap is the difference between a measurement and a
+                # colour the triangulation made up.
+                span_x = np.ptp(grid["x"]) or 1.0
+                span_y = np.ptp(grid["y"]) or 1.0
+                near = int(np.argmin(((grid["x"] - x) / span_x) ** 2
+                                     + ((grid["y"] - y) / span_y) ** 2))
+                value = grid["z"][near]
+                away = float(np.hypot(grid["x"][near] - x, grid["y"][near] - y))
+                parts.append(
+                    f"{label}=" + ("no data" if not np.isfinite(value)
+                                   else f"{value:.6g}"))
+                parts.append(f"(nearest point, {away:.3g} away)")
+                return "   ".join(parts)
+            column = int(np.searchsorted(cell_x, x) - 1)
+            row = int(np.searchsorted(cell_y, y) - 1)
             if 0 <= column < len(grid["x"]) and 0 <= row < len(grid["y"]):
                 value = grid["z"][row, column]
                 parts.append(

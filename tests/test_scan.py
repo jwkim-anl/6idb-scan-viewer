@@ -1,7 +1,7 @@
 """Pinning what is read out of a master file, and the numbers derived from it."""
 
 import numpy as np
-from helpers import EXAMPLE_MASTER, Sandbox, check, have_example, write_master
+from helpers import EXAMPLE_MASTER, ROOT, Sandbox, check, have_example, write_master
 
 from da6idb import scan as sv
 
@@ -248,3 +248,54 @@ def test_lone_dropouts_catch_the_point_the_beam_missed():
     # a monitor that simply drifts is not a dropout
     assert not sv.lone_dropouts(np.linspace(1.0e6, 0.6e6, 40)).any()
     assert not sv.lone_dropouts(np.full(40, 1.85e6)).any()
+
+
+def test_read_scatter_keeps_the_positions_a_fly_grid_recorded():
+    """A flown axis lands where it lands; nothing here snaps it."""
+    if not (ROOT / "data" / "test_26_3").is_dir():
+        return
+    folder = ROOT / "data" / "test_26_3"
+    path = folder / "test_00014_master.hdf"
+    if not path.is_file():
+        return
+    field = "lambda250k_stats5_total"
+    # a fly grid is not a lattice, and read_grid is right to refuse it
+    assert sv.read_grid(path, field) is None
+    got = sv.read_scatter(path, field)
+    assert got["scattered"] and got["x_name"] == "cryo_x"
+    assert got["y_name"] == "cryo_y"
+    # x, y and z run alongside each other, one entry per measurement
+    assert got["x"].shape == got["y"].shape == got["z"].shape
+    assert got["points"] == got["x"].size
+
+    # the plan declared 11 x 11 = 121 and the scan recorded 125: there is
+    # no rectangle here, which is the whole reason this function exists
+    assert sv.read_scan_info(path)["shape"] == [11, 11]
+    assert got["points"] != 11 * 11
+
+    # the stepped axis holds exact levels, the flown one does not
+    assert np.unique(np.round(got["y"], 6)).size == 11
+    assert np.unique(np.round(got["x"], 6)).size > 11
+    check("scan/fly_grid", {
+        "points": got["points"],
+        "rows": int(np.unique(np.round(got["y"], 6)).size),
+        "x_span": [round(float(got["x"].min()), 4), round(float(got["x"].max()), 4)],
+    })
+
+
+def test_grid_stats_reads_either_shape_of_map():
+    lattice = {"x": np.array([0.0, 1.0]), "y": np.array([10.0, 20.0]),
+               "z": np.array([[1.0, 5.0], [2.0, np.nan]])}
+    stats = sv.grid_stats(lattice)
+    assert stats["max_z"] == 5.0 and stats["max_at"] == (1.0, 10.0)
+    assert stats["min_z"] == 1.0 and stats["min_at"] == (0.0, 10.0)
+
+    # the same question of points as measured, where the position is read
+    # off at the same index rather than unravelled
+    points = {"x": np.array([0.3, 0.7, 0.5]), "y": np.array([9.0, 9.5, 9.2]),
+              "z": np.array([1.0, 5.0, np.nan]), "scattered": True}
+    stats = sv.grid_stats(points)
+    assert stats["max_z"] == 5.0 and stats["max_at"] == (0.7, 9.5)
+    assert stats["min_z"] == 1.0 and stats["min_at"] == (0.3, 9.0)
+    assert sv.grid_stats({"x": np.array([0.0]), "y": np.array([0.0]),
+                          "z": np.array([np.nan])})["max_z"] is None

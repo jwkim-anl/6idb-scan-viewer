@@ -708,6 +708,70 @@ def read_grid(
                 return grid
     return None
 
+def read_scatter(
+    path: Path, value_field: str, monitor_field: str = ""
+) -> dict | None:
+    """The points of a two-motor scan where they were actually measured.
+
+    For a plan whose grid is not a lattice. A fly grid steps one axis and
+    flies the other, so the flown positions differ from row to row -- and
+    so do the row lengths. On the example scans one row holds 11 points
+    and the next 12, the rows alternate direction, and 125 points come
+    back where the plan declared 121; two others declared 441 and recorded
+    372 and 377. There is no rectangle to reshape into. What there is, is
+    a set of ``(x, y, value)`` where the motors were, and that is what
+    this returns -- nothing is snapped to a lattice or resampled, because
+    the irregularity is the measurement rather than noise in it.
+
+    ``None`` when the scan names fewer than two motors or did not record
+    them. :func:`read_grid` is the one to try first: a scan that really is
+    a raster is better drawn as one, since a lattice says which cells were
+    never visited and a cloud of points cannot.
+    """
+    info = read_scan_info(path)
+    if len(info["motors"]) != 2:
+        return None
+    available = stream_fields(path, "primary")
+    slow_options = _grid_axis_candidates(available, info["motors"][0])
+    fast_options = _grid_axis_candidates(available, info["motors"][1])
+    if not slow_options or not fast_options:
+        return None
+
+    wanted = {slow_options[0], fast_options[0], value_field}
+    if monitor_field:
+        wanted.add(monitor_field)
+    try:
+        data = read_primary(path, list(wanted))
+    except OSError:
+        return None
+    slow_name, fast_name = slow_options[0], fast_options[0]
+    if not {slow_name, fast_name, value_field} <= set(data):
+        return None
+
+    values = data[value_field]
+    monitor = data.get(monitor_field) if monitor_field else None
+    if monitor is not None:
+        length = min(len(values), len(monitor))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            values = np.where(
+                monitor[:length] != 0, values[:length] / monitor[:length], np.nan
+            )
+    # The reader does not truncate the columns against each other, and a
+    # fly scan is exactly where they come back different lengths.
+    rows = min(data[slow_name].size, data[fast_name].size, values.size)
+    if rows < 3:            # fewer than a triangle: nothing to draw
+        return None
+    return {
+        "x_name": fast_name,
+        "y_name": slow_name,
+        "x": np.asarray(data[fast_name][:rows], dtype=float),
+        "y": np.asarray(data[slow_name][:rows], dtype=float),
+        "z": np.asarray(values[:rows], dtype=float),
+        "points": int(rows),
+        "scattered": True,
+    }
+
+
 def axis_edges(values: np.ndarray) -> np.ndarray:
     """Cell boundaries around the grid's sample positions.
 
@@ -925,14 +989,23 @@ def centered_limits(
 
 
 def grid_stats(grid: dict) -> dict[str, float | None]:
-    """Max/min of a grid and the (x, y) they sit at."""
+    """Max/min of a map and the (x, y) they sit at.
+
+    Takes either shape of map: a lattice from :func:`read_grid`, whose z
+    is a rectangle indexed by row and column, or the points as measured
+    from :func:`read_scatter`, where x, y and z run alongside each other
+    and the position is simply read off at the same index.
+    """
     z = grid["z"]
     stats = {"max_z": None, "max_at": None, "min_z": None, "min_at": None}
     if not np.any(np.isfinite(z)):
         return stats
-    flat_max = int(np.nanargmax(z))
-    flat_min = int(np.nanargmin(z))
-    for key, flat in (("max", flat_max), ("min", flat_min)):
+    for key, flat in (("max", int(np.nanargmax(z))),
+                      ("min", int(np.nanargmin(z)))):
+        if np.ndim(z) == 1:
+            stats[f"{key}_z"] = float(z[flat])
+            stats[f"{key}_at"] = (float(grid["x"][flat]), float(grid["y"][flat]))
+            continue
         row, column = np.unravel_index(flat, z.shape)
         stats[f"{key}_z"] = float(z[row, column])
         stats[f"{key}_at"] = (float(grid["x"][column]), float(grid["y"][row]))

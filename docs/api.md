@@ -205,13 +205,14 @@ Reading a master file: its metadata, its streams and the numbers in them.
 - `scan_hkl(path)` — Mean and spread of psic_h/k/l over the scan, or None if not recorded.
 - `format_scan_hkl(values, decimals=4)` — ``H 1.0135 K -0.4926 ± 0.0386 L 7.4840`` for one scan.
 - `read_grid(path, value_field, monitor_field='')` — *value_field* laid out over a two-motor grid scan, or ``None``.
+- `read_scatter(path, value_field, monitor_field='')` — The points of a two-motor scan where they were actually measured.
 - `axis_edges(values)` — Cell boundaries around the grid's sample positions.
 - `curve_stats(x, y)` — Max/min (with position), and FWHM center/width, for one plotted curve.
 - `clipped_limits(z, percent=COLOR_CLIP_PERCENT)` — Colour limits leaving out the most extreme *percent* at each end.
 - `lone_dropouts(monitor)` — Mask the points where the beam was gone for that point alone.
 - `scale_extend(z, low, high)` — Which ends of *z* fall outside ``(low, high)``, as colour-bar arrows.
 - `centered_limits(z, low, high)` — ``(low, high)`` widened until zero sits exactly in the middle.
-- `grid_stats(grid)` — Max/min of a grid and the (x, y) they sit at.
+- `grid_stats(grid)` — Max/min of a map and the (x, y) they sit at.
 
 ### `da6idb.session`
 
@@ -264,4 +265,4 @@ What was stepped across a set of scans, and plotting against it.
 - `trend_value(stats, choice)` — Read one :func:`trend_choices` entry out of a fit, or None.
 - `trend_axis(paths, against)` — Where each scan sits on the trend axis, keyed by ``str(path)``.
 
-<!-- 147 callables, 10 classes -->
+<!-- 148 callables, 10 classes -->
