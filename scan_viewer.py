@@ -529,6 +529,12 @@ class HdfViewer(QtWidgets.QMainWindow):
         # dY/dX shares the X axis and wants its own Y scale.
         self.deriv_ax = self.curve_ax.twinx()
         self.deriv_ax.set_visible(False)
+        # The toolbar zooms whichever axes is on top, and a twin always is
+        # -- even an invisible one. Left to itself the rubber band set the
+        # twin's limits and left the left-hand axis autoscaled, so a redraw
+        # threw the zoom away. Navigation belongs to the axis the data is
+        # on; the twins follow its x through sharing.
+        self.deriv_ax.set_navigate(False)
         # Created per redraw when "Separate Y" is on, and removed with the
         # curves: an axis outlives a clear() where a line does not.
         self._extra_axes: list = []
@@ -1099,8 +1105,13 @@ class HdfViewer(QtWidgets.QMainWindow):
                     prev_ylim = self.ax.get_ylim()
             elif mode == "curves" and self.curve_ax.lines:
                 # The autoscale flag is matplotlib's own record of whether
-                # the user has zoomed or panned that axis.
-                if not self.curve_ax.get_autoscalex_on():
+                # the user has zoomed or panned. Asked of every axes that
+                # shares the x axis, not just this one: anything that
+                # zooms a twin leaves the flag here on while the range
+                # changes underneath, through the shared axis.
+                shared = self.curve_ax.get_shared_x_axes().get_siblings(
+                    self.curve_ax)
+                if any(not axis.get_autoscalex_on() for axis in shared):
                     prev_xlim = self.curve_ax.get_xlim()
                 if not self.curve_ax.get_autoscaley_on():
                     prev_ylim = self.curve_ax.get_ylim()
@@ -1201,6 +1212,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         if separate:
             for index in range(1, len(curves)):
                 extra = self.curve_ax.twinx()
+                extra.set_navigate(False)          # see deriv_ax above
                 extra.spines["right"].set_position(
                     ("outward", AXIS_SPACING * (index - 1)))
                 color = CURVE_COLORS[index % len(CURVE_COLORS)]
