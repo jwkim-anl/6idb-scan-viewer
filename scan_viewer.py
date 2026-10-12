@@ -202,6 +202,14 @@ class HdfViewer(QtWidgets.QMainWindow):
         self._last_curves: list = []
         self._last_trend: list = []
         self._fit_cache: dict = {}
+        self._drawing = False
+        # Zooming has to refit, or the fit on screen is of a range the plot
+        # is no longer showing. Debounced, because the toolbar's rubber band
+        # moves the limits continuously while it is dragged.
+        self._refit_timer = QtCore.QTimer(self)
+        self._refit_timer.setSingleShot(True)
+        self._refit_timer.setInterval(180)
+        self._refit_timer.timeout.connect(self._update_plot)
         self._last_mode = ""
         self._x_is_auto = True
         self._manual_x = ""
@@ -524,6 +532,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         # Created per redraw when "Separate Y" is on, and removed with the
         # curves: an axis outlives a clear() where a line does not.
         self._extra_axes: list = []
+        self.curve_ax.callbacks.connect("xlim_changed", self._x_range_changed)
         self.curve_toolbar = NavigationToolbar2QT(self.curve_canvas, panel)
 
         self.figure = Figure(figsize=(6, 4))
@@ -1037,6 +1046,15 @@ class HdfViewer(QtWidgets.QMainWindow):
     # -- Plotting -----------------------------------------------------------
 
     def _update_plot(self):
+        if self._drawing:
+            return
+        self._drawing = True
+        try:
+            self._draw_everything()
+        finally:
+            self._drawing = False
+
+    def _draw_everything(self):
         paths = self._selected_paths()
         x_field = self._x_field()
         y_fields = self._checked_y_fields()
@@ -1299,6 +1317,9 @@ class HdfViewer(QtWidgets.QMainWindow):
             extra.remove()
         self._extra_axes = []
         self.curve_ax.clear()
+        # clear() drops the axes' callbacks with everything else, so the
+        # zoom hook has to be put back or it survives exactly one redraw.
+        self.curve_ax.callbacks.connect("xlim_changed", self._x_range_changed)
         self.deriv_ax.clear()
         # clear() resets a twin to a left-hand axis, which put the dY/dX
         # label back over the left one's. twinx() only sets this at birth.
@@ -1403,6 +1424,18 @@ class HdfViewer(QtWidgets.QMainWindow):
                 self.trend_x_combo.setCurrentText(current)
         finally:
             del blocked
+
+    def _x_range_changed(self, _axis):
+        """Refit after the view has been zoomed or panned.
+
+        Only with a fit on: without one nothing here depends on the range,
+        and a redraw on every frame of a pan would be a waste. The guard is
+        what stops the loop, _update_plot setting the limits itself when it
+        puts a zoom back.
+        """
+        if self._drawing or self.fit_combo.currentText() == FIT_NONE:
+            return
+        self._refit_timer.start()
 
     @staticmethod
     def _within(x, y, window):
