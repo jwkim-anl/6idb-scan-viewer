@@ -1154,11 +1154,18 @@ class HdfViewer(QtWidgets.QMainWindow):
 
         shape = self.fit_combo.currentText()
         wanted = self.peaks_spin.value()
+        window = self._fit_window(prev_xlim)
         fits: list[dict | None] = []
+        windowed = window is not None
         if shape != FIT_NONE:
             rows: list[tuple[str, dict]] = []
             for (label, x, y), (_label, stats) in zip(curves, stats_rows):
-                got = self._fitted(x, y, shape, wanted, stats.get("fwhm"))
+                # The seed goes with the full curve, so it is dropped for a
+                # window: peak_fit works one out of what it was given.
+                cut_x, cut_y, used = self._within(x, y, window)
+                windowed = windowed and used
+                got = self._fitted(cut_x, cut_y, shape, wanted,
+                                   None if used else stats.get("fwhm"))
                 fits.append(got)
                 rows.append((label, {**stats, **got}))
                 # A component has no curve of its own, so its row carries
@@ -1201,7 +1208,8 @@ class HdfViewer(QtWidgets.QMainWindow):
             if got is None:
                 continue
             color = CURVE_COLORS[index % len(CURVE_COLORS)]
-            grid = np.linspace(float(np.nanmin(x)), float(np.nanmax(x)),
+            cut_x, _cut_y, _used = self._within(x, x, window)
+            grid = np.linspace(float(np.nanmin(cut_x)), float(np.nanmax(cut_x)),
                                _fit.PEAK_FIT_PLOT_POINTS)
             model = _fit.peak_model(grid, shape, got)
             if model is None:
@@ -1214,6 +1222,10 @@ class HdfViewer(QtWidgets.QMainWindow):
             for piece in _fit.peak_parts(grid, shape, got):
                 axes[index].plot(grid, piece, color=color, lw=0.9, ls=":")
 
+        if windowed and shape != FIT_NONE:
+            self.curve_ax.set_title(
+                f"fitted over the shown range, {min(window):.6g} to "
+                f"{max(window):.6g}", fontsize=8)
         self.curve_ax.set_xlabel(x_field)
         ylabel = ", ".join(y_fields)
         if normalize:
@@ -1279,7 +1291,7 @@ class HdfViewer(QtWidgets.QMainWindow):
 
         self._last_curves = curves
         self._update_stats_table(stats_rows)
-        self._draw_trend(paths, x_field, y_fields, monitor_field)
+        self._draw_trend(paths, x_field, y_fields, monitor_field, window)
 
     def _clear_curves(self):
         """Empty the curve page, legend and every extra Y axis alike."""
@@ -1392,6 +1404,34 @@ class HdfViewer(QtWidgets.QMainWindow):
         finally:
             del blocked
 
+    @staticmethod
+    def _within(x, y, window):
+        """*x* and *y* cut down to the x range *window*, or left alone.
+
+        What is on screen is what gets fitted. Zoom to one peak of a scan
+        that has several and the fit follows: the alternative is reading a
+        number off a plot that was not fitted to what the plot is showing.
+        Returns ``(x, y, applied)``. A window holding fewer points than a
+        fit needs is ignored rather than obeyed -- a blank row is no use to
+        anybody -- and *applied* says so, because the plot must not then
+        claim to have fitted a range it did not.
+        """
+        if window is None:
+            return x, y, False
+        low, high = min(window), max(window)
+        inside = (x >= low) & (x <= high)
+        if int(np.count_nonzero(inside)) < _fit.PEAK_FIT_MIN_POINTS:
+            return x, y, False
+        return x[inside], y[inside], True
+
+    def _fit_window(self, prev_xlim):
+        """The x range to fit over: what is shown, once it has been zoomed.
+
+        ``prev_xlim`` is set only where the axis was not autoscaled, which
+        is matplotlib's own record of the user having zoomed or panned it.
+        """
+        return prev_xlim
+
     def _fitted(self, x, y, shape, peaks, fwhm_seed=None):
         """The fit of this curve under these settings, computed once.
 
@@ -1456,7 +1496,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             del blocked
         return choices
 
-    def _draw_trend(self, paths, x_field, y_fields, monitor_field):
+    def _draw_trend(self, paths, x_field, y_fields, monitor_field, window=None):
         """Fill the plot beside the curves: one point per scan.
 
         Drawn from the same fit the curves carry, so the point on the right
@@ -1498,6 +1538,7 @@ class HdfViewer(QtWidgets.QMainWindow):
         axis = _trends.trend_axis(paths, against)
 
         series: dict[str, list[tuple[float, float]]] = {}
+        trend_windowed = window is not None
         skipped = 0
         for path in paths:
             where = axis.get(str(path))
@@ -1519,10 +1560,12 @@ class HdfViewer(QtWidgets.QMainWindow):
                 if monitor is not None:
                     with np.errstate(divide="ignore", invalid="ignore"):
                         y = np.where(monitor != 0, y / monitor, np.nan)
-                # Through the same door as the curves above, so the point
-                # on the trend is the fit in the table and not a second
-                # one that happened to be seeded differently.
-                got = self._fitted(x, y, shape, wanted)
+                # Through the same door as the curves above, over the same
+                # range, so the point on the trend is the fit in the table
+                # and not a second one of a different stretch of the scan.
+                cut_x, cut_y, used = self._within(x, y, window)
+                trend_windowed = trend_windowed and used
+                got = self._fitted(cut_x, cut_y, shape, wanted)
                 value = _trends.trend_value(got, choice)
                 if value is not None:
                     series.setdefault(y_field, []).append((where, float(value)))
@@ -1558,6 +1601,8 @@ class HdfViewer(QtWidgets.QMainWindow):
         title = f"{fitted} fitted point(s) of {len(paths) * len(y_fields)}"
         if skipped:
             title += f"   [{skipped} with no {against}]"
+        if trend_windowed:
+            title += f"\nfitted over {min(window):.6g} to {max(window):.6g}"
         self.trend_ax.set_title(title, fontsize=9)
         self.trend_figure.tight_layout()
         self.trend_canvas.draw_idle()
