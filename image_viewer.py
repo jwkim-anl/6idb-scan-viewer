@@ -266,6 +266,10 @@ FILE_COLORS = [
     (200, 110, 0),
     (20, 120, 140),
 ]
+# Where the 2D ROI plot's points start, and how much wider the ring
+# marking the current frame is drawn, so it stays a ring at any size.
+POINT_SIZE = 8
+HIGHLIGHT_MARGIN = 6
 PLOT_BACKGROUND = "w"
 PLOT_FOREGROUND = "k"
 
@@ -1085,6 +1089,22 @@ class Roi2DPlotDock(_RoiDockBase):
         self.z_auto_check = QtWidgets.QCheckBox("Auto")
         self.z_auto_check.setChecked(True)
         cmap_row.addWidget(self.z_auto_check)
+        cmap_row.addSpacing(12)
+        # How big a point should be depends on how many there are and how
+        # close together they fall: a 51-point line scan wants them large
+        # enough to read a colour off, a 600-frame map wants them small
+        # enough not to cover each other.
+        cmap_row.addWidget(QtWidgets.QLabel("Point size:"))
+        self.point_size_spin = QtWidgets.QSpinBox()
+        self.point_size_spin.setRange(1, 40)
+        self.point_size_spin.setValue(POINT_SIZE)
+        self.point_size_spin.setFixedWidth(60)
+        self.point_size_spin.setToolTip(
+            "Diameter of a plotted point, in pixels. The ring marking the\n"
+            "current frame grows with it."
+        )
+        self.point_size_spin.valueChanged.connect(self._point_size_changed)
+        cmap_row.addWidget(self.point_size_spin)
         cmap_row.addStretch(1)
         layout.addLayout(cmap_row)
 
@@ -1100,11 +1120,12 @@ class Roi2DPlotDock(_RoiDockBase):
             self.plot_item.getAxis(edge).setTextPen(PLOT_FOREGROUND)
         layout.addWidget(self.plot_widget, 1)
 
-        self.scatter = pg.ScatterPlotItem(size=8, pen=pg.mkPen(None))
+        self.scatter = pg.ScatterPlotItem(size=POINT_SIZE, pen=pg.mkPen(None))
         # Black, not white: the ring marks the selected point and on a
         # white background a white ring is not there at all.
         self.highlight = pg.ScatterPlotItem(
-            size=14, pen=pg.mkPen("k", width=2), brush=pg.mkBrush(None)
+            size=POINT_SIZE + HIGHLIGHT_MARGIN,
+            pen=pg.mkPen("k", width=2), brush=pg.mkBrush(None)
         )
         self.plot_item.addItem(self.scatter)
         self.plot_item.addItem(self.highlight)
@@ -1159,6 +1180,16 @@ class Roi2DPlotDock(_RoiDockBase):
             f"sum={np.sum(sub):.6g}  min={np.min(sub):.6g}  "
             f"max={np.max(sub):.6g}  mean={np.mean(sub):.6g}"
         )
+
+    def _point_size_changed(self, size: int):
+        """Resize the points, and the ring that marks the current frame.
+
+        setSize on the items rather than a redraw: the data has not
+        changed, and a 600-frame plot does not want recomputing to answer
+        a question about how big a dot is.
+        """
+        self.scatter.setSize(int(size))
+        self.highlight.setSize(int(size) + HIGHLIGHT_MARGIN)
 
     def _on_auto_toggled(self, checked: bool):
         self.z_min_spin.setEnabled(not checked)
