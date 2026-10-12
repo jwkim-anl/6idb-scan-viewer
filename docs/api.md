@@ -165,6 +165,7 @@ The detector's image stack, and everything recorded alongside it.
 
 - `nearest_index(frame_epoch, scan_epoch)` — For each frame, the scan point closest to it in time.
 - `evenly_spaced_index(n_frames, n_scan_points)` — Map each frame onto a scan point by position, not by time.
+- `read_frame_positions(master, n_frames=None)` — Where the motors were for each detector frame, from the master.
 - `read_scan_channels(image, frame_epoch, n_frames=None, master=None)` — The master file's primary fields, resampled onto the image's frames.
 - **`ImageData`** — The whole contents of one ``pva*.h5`` file, held in memory.
   - properties: `n_frames`, `frame_shape`
@@ -265,4 +266,4 @@ What was stepped across a set of scans, and plotting against it.
 - `trend_value(stats, choice)` — Read one :func:`trend_choices` entry out of a fit, or None.
 - `trend_axis(paths, against)` — Where each scan sits on the trend axis, keyed by ``str(path)``.
 
-<!-- 148 callables, 10 classes -->
+<!-- 149 callables, 10 classes -->

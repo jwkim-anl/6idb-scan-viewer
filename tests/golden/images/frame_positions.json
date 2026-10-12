@@ -1,0 +1,14 @@
+{
+ "columns": [
+  "frame/cryo_x",
+  "frame/cryo_x_end",
+  "frame/cryo_x_start",
+  "frame/cryo_y",
+  "frame/frame_index",
+  "frame/in_scan",
+  "frame/line",
+  "frame/timestamp"
+ ],
+ "frames": 170,
+ "in_scan": 121
+}

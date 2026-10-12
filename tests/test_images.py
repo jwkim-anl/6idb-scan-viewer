@@ -1,7 +1,8 @@
 """Pinning the image stack, its per-frame channels and its ROIs."""
 
 import numpy as np
-from helpers import EXAMPLE_IMAGE, Sandbox, check, have_example, write_image, write_master
+from helpers import EXAMPLE_IMAGE, EXAMPLE_MASTER, Sandbox, check, have_example
+from helpers import write_image, write_master
 
 from da6idb import files, images as iv
 from da6idb.rois import Rect
@@ -139,3 +140,73 @@ def test_to_frame_puts_a_centre_of_mass_back_where_it_came_from():
         metrics = series(frame, rect)
         x, y = rect.to_frame(metrics["comx"][0], metrics["comy"][0], (60, 60))
         assert (x, y) == (33.0, 27.0)
+
+
+def _with_frame_positions(path, n_frames, **columns):
+    """A master carrying a frame_positions group, as a fly writer leaves."""
+    import h5py
+    write_master(path, points=max(n_frames // 2, 2))
+    with h5py.File(path, "a") as f:
+        group = f.create_group(iv.FRAME_POSITIONS_PATH)
+        for name, values in columns.items():
+            group.create_dataset(name, data=np.asarray(values))
+    return path
+
+
+def test_frame_positions_are_read_per_frame():
+    with Sandbox() as d:
+        path = _with_frame_positions(
+            d / "s_00020_master.hdf", 6,
+            cryo_x=np.linspace(0.0, 1.0, 6),
+            in_scan=np.array([False, True, True, True, True, False]),
+            line=np.arange(6),
+        )
+        got = iv.read_frame_positions(path, 6)
+        assert sorted(got) == ["frame/cryo_x", "frame/in_scan", "frame/line"]
+        assert np.allclose(got["frame/cryo_x"], np.linspace(0.0, 1.0, 6))
+        # booleans come through as 0 and 1, so they can be plotted and
+        # divided by like any other column
+        assert got["frame/in_scan"].dtype == float
+        assert list(got["frame/in_scan"]) == [0.0, 1.0, 1.0, 1.0, 1.0, 0.0]
+
+
+def test_a_column_that_is_not_per_frame_is_left_out():
+    with Sandbox() as d:
+        path = _with_frame_positions(
+            d / "s_00020_master.hdf", 6,
+            cryo_x=np.linspace(0.0, 1.0, 6),
+            something_else=np.zeros(4),      # not one row per frame
+        )
+        got = iv.read_frame_positions(path, 6)
+        assert "frame/cryo_x" in got
+        assert "frame/something_else" not in got, "a short column was lined up"
+        # and asked about a different frame count, none of it applies
+        assert iv.read_frame_positions(path, 99) == {}
+
+
+def test_a_master_without_the_group_gives_nothing():
+    with Sandbox() as d:
+        plain = write_master(d / "s_00001_master.hdf", points=5)
+        assert iv.read_frame_positions(plain, 5) == {}
+        assert iv.read_frame_positions(None, 5) == {}
+        assert iv.read_frame_positions(d / "missing.hdf", 5) == {}
+
+
+def test_the_fly_scan_prefers_its_recorded_positions():
+    """The resampled channel and the recorded one must not be confused."""
+    folder = EXAMPLE_MASTER.parent / "test_26_3"
+    image = EXAMPLE_MASTER.parent / "lambda" / "test_26_3" / "test_00020.h5"
+    if not (folder.is_dir() and image.is_file()):
+        return
+    data = iv.ImageData(image)
+    recorded = data.channels["frame/cryo_x"]
+    resampled = data.channels["scan/cryo_x"]
+    assert recorded.size == data.n_frames == 170
+    # the stream holds 120 points against 170 frames, so carrying them
+    # across lands a long way out -- which is why the writer records them
+    assert np.abs(recorded - resampled).max() > 0.3
+    check("images/frame_positions", {
+        "frames": int(data.n_frames),
+        "in_scan": int(np.count_nonzero(data.channels["frame/in_scan"])),
+        "columns": sorted(k for k in data.channels if k.startswith("frame/")),
+    })

@@ -44,6 +44,12 @@ CA_GROUP_PATHS = ("entry/data/metadata/ca", "entry/data/metadata/motor_positions
 # Master-file channels are offered alongside the image file's own, under this
 # prefix so their provenance is plain and they cannot collide.
 SCAN_PREFIX = "scan/"
+# Where a fly scan's writer records the motors per detector frame, and the
+# prefix those appear under. Kept apart from SCAN_PREFIX because the two
+# answer different questions: a "scan/" channel is a scan point carried
+# onto the frames, a "frame/" one was recorded against the frame itself.
+FRAME_POSITIONS_PATH = "entry/frame_positions"
+FRAME_PREFIX = "frame/"
 
 # Refuse rather than thrash: the stack is read into memory in one go (a 110 MB
 # 103x516x516 stack decodes in well under a second).
@@ -124,6 +130,50 @@ def _scan_point_count(group) -> int | None:
     if not counts:
         return None
     return max(counts.items(), key=lambda kv: kv[1])[0]
+
+def read_frame_positions(master, n_frames: int | None = None) -> dict:
+    """Where the motors were for each detector frame, from the master.
+
+    A fly scan does not stop at its points, so the detector and the
+    bluesky stream do not agree on how many there are: on the example
+    scan the stream holds 120 points and the detector wrote 170 frames,
+    121 of which the writer marks ``in_scan``. Matching the one onto the
+    other by time or by position is guesswork, and this is the writer
+    saying outright where each frame was taken.
+
+    Every numeric column under :data:`FRAME_POSITIONS_PATH` comes back
+    under :data:`FRAME_PREFIX`, booleans as 0 and 1 so they can be
+    plotted and divided by like anything else -- ``in_scan`` as a
+    normalisation is how you drop the turnaround frames.
+
+    Empty when the master has no such group, which is every scan written
+    before it existed.
+    """
+    if master is None:
+        return {}
+    try:
+        with h5py.File(master, "r") as f:
+            group = f.get(FRAME_POSITIONS_PATH)
+            if group is None:
+                return {}
+            out: dict[str, np.ndarray] = {}
+            for name in group:
+                item = group[name]
+                if not isinstance(item, h5py.Dataset):
+                    continue
+                try:
+                    values = np.asarray(item[()], dtype=float).ravel()
+                except (TypeError, ValueError):
+                    continue
+                # One row per frame or it is not about the frames, and
+                # lining up a shorter column would invent the rest.
+                if n_frames and values.size != int(n_frames):
+                    continue
+                out[FRAME_PREFIX + name] = values
+            return out
+    except OSError:
+        return {}
+
 
 def read_scan_channels(
     image: Path, frame_epoch, n_frames: int | None = None, master: Path | None = None
@@ -247,6 +297,9 @@ class ImageData:
         self.channels.update(
             read_scan_channels(self.path, self.epoch, n_frames, master=self.master_path)
         )
+        # Last, so that where the writer recorded a position per frame it
+        # wins over the same motor resampled from the scan points.
+        self.channels.update(read_frame_positions(self.master_path, n_frames))
 
     @property
     def n_frames(self) -> int:
