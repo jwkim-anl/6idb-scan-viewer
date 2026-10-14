@@ -53,10 +53,20 @@ class VtiWindow(QtWidgets.QMainWindow):
         self._theme = theme(BACKGROUNDS[0])
         self.path: Path | None = None
         self._volume_actor = None
+        # How the volume's own copy of the intensities was squeezed into
+        # 0..255 when it was drawn, or None if it was not -- see
+        # _learn_volume_scale.
+        self._volume_scale = None
         self._slice_actor = None
         self._slice_widget = None
         self._slice_avg_actor = None
         self._slice_window = None
+        # A window the volume cannot show by recolouring alone is redrawn once
+        # the spin boxes go quiet, not on every click of their arrows.
+        self._rebuild_timer = QtCore.QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(400)
+        self._rebuild_timer.timeout.connect(self.refresh_view)
         self.folder: Path | None = None
         self.span = (0.0, 1.0)
         self._crop_cache = (None, None)
@@ -1004,7 +1014,89 @@ class VtiWindow(QtWidgets.QMainWindow):
                 f"Volume rendering failed: {type(exc).__name__}: {exc}"
             )
             return
+        self._learn_volume_scale(grid, low, high)
+        if self._volume_scale is not None:
+            # On the older pyvista the transfer functions add_volume built
+            # assume clim filled 0..255, which is wrong whenever clim reaches
+            # past the data. Put the right ones in before anything is shown.
+            self._retint_volume(lut, low, high)
         self._apply_quality()
+
+    def _learn_volume_scale(self, grid, low, high):
+        """Find out whether pyvista redrew the intensities into 0..255.
+
+        Up to pyvista 0.44 ``add_volume`` clipped its copy of the data to
+        ``clim`` and stretched what survived -- those cells' own min to max,
+        not clim -- over 0..255, so a volume's transfer functions had to be
+        addressed in that range. From 0.45 the values reach the mapper
+        untouched and the transfer functions are in data units.
+
+        Both are still in the wild, and the difference is silent: the wrong
+        assumption paints the colour map over the wrong window rather than
+        raising. So ask the mapper what it is actually holding instead of
+        reading a version string.
+
+        Leaves ``_volume_scale`` None when the values went in untouched, or
+        sets it to ``((data_min, data_max), (lo, hi))`` describing the squeeze.
+        """
+        self._volume_scale = None
+        if self._volume_actor is None:
+            return
+        try:
+            source = np.asarray(grid.point_data[INTENSITY])
+            drawn = np.asarray(self._volume_actor.mapper.dataset.active_scalars)
+            if drawn.shape != source.shape:
+                return
+            # A strided handful is enough to tell: the transform is linear and
+            # monotone, so if it happened at all it moved nearly every value.
+            # Cheaper than two full passes over tens of millions of cells.
+            step = max(1, source.size // 256)
+            if np.allclose(source[::step], drawn[::step],
+                           rtol=1e-6, atol=1e-6, equal_nan=True):
+                return
+            data = (float(np.nanmin(source)), float(np.nanmax(source)))
+            self._volume_scale = (
+                data, (max(float(low), data[0]), min(float(high), data[1]))
+            )
+        except Exception:
+            self._volume_scale = None
+
+    def _retint_volume(self, lut, low, high):
+        """Show the window *low*..*high* on a volume drawn in 0..255 space.
+
+        Only for the older pyvista, where the mapper never sees the
+        intensities themselves. ``apply_lookup_table`` lays the colours over
+        whatever the limits say, which is why setting the lookup table alone
+        moved the slice but not the volume; here the window is translated into
+        the 0..255 space the copy actually lives in.
+
+        Returns False when that copy cannot show the window faithfully: it
+        reaches into intensities clipped away when the volume was drawn, or is
+        so narrow a slice of 0..255 that the GPU's sampled transfer function
+        would band. Only a redraw helps then.
+        """
+        if self._volume_actor is None or self._volume_scale is None:
+            return False
+        from vtkmodules.vtkCommonDataModel import vtkPiecewiseFunction
+        from vtkmodules.vtkRenderingCore import vtkColorTransferFunction
+
+        (data_lo, data_hi), (lo, hi) = self._volume_scale
+        if not (hi > lo and high > low):
+            return False
+        n = lut.n_values
+        table = np.asarray(lut.values, float)
+        color = vtkColorTransferFunction()
+        opacity = vtkPiecewiseFunction()
+        positions = (np.linspace(low, high, n) - lo) * (255.0 / (hi - lo))
+        for x, (r, g, b, a) in zip(positions, table):
+            color.AddRGBPoint(x, r / 255.0, g / 255.0, b / 255.0)
+            # Alpha over n, not 255: pyvista's own to_opacity_tf, so a retinted
+            # volume looks exactly like a freshly drawn one.
+            opacity.AddPoint(x, a / n)
+        self._volume_actor.prop.SetColor(color)
+        self._volume_actor.prop.SetScalarOpacity(opacity)
+        clipped = (low < lo and lo > data_lo) or (high > hi and hi < data_hi)
+        return not clipped and (high - low) * 8 >= (hi - lo)
 
     def _apply_quality(self):
         """Tell the mapper whether it may coarsen while the camera moves.
@@ -1016,9 +1108,20 @@ class VtiWindow(QtWidgets.QMainWindow):
         """
         if self._volume_actor is None:
             return
+        coarsen = not self.full_quality_check.isChecked()
+        mapper = self._volume_actor.mapper
         try:
-            self._volume_actor.mapper.SetAutoAdjustSampleDistances(
-                not self.full_quality_check.isChecked())
+            # pyvista's default is vtkSmartVolumeMapper, and its Render()
+            # reads AutoAdjustSampleDistances only while
+            # InteractiveAdjustSampleDistances is off. On -- its default -- it
+            # derives the inner GPU mapper's flag from the window's desired
+            # update rate instead, and never looks at ours. So that one has to
+            # go off too, or the tick does nothing at all.
+            mapper.SetInteractiveAdjustSampleDistances(coarsen)
+        except Exception:
+            pass
+        try:
+            mapper.SetAutoAdjustSampleDistances(coarsen)
         except Exception:
             pass
 
@@ -1055,7 +1158,14 @@ class VtiWindow(QtWidgets.QMainWindow):
         restyled = False
         if self._volume_actor is not None:
             try:
-                self._volume_actor.prop.apply_lookup_table(lut)
+                if self._volume_scale is None:
+                    self._volume_actor.prop.apply_lookup_table(lut)
+                    # The lookup table alone is not enough: the mapper goes on
+                    # clipping to the range it was drawn with, so without this
+                    # the new window has no effect on screen.
+                    self._volume_actor.mapper.scalar_range = (low, high)
+                elif not self._retint_volume(lut, low, high):
+                    self._rebuild_timer.start()
                 restyled = True
             except Exception:
                 pass
@@ -1068,6 +1178,13 @@ class VtiWindow(QtWidgets.QMainWindow):
                 restyled = True
             except Exception:
                 pass
+        # The bar holds the lookup table it was made with; hand it the new one,
+        # or it goes on labelling the old limits.
+        try:
+            for bar in self.plotter.scalar_bars.values():
+                bar.SetLookupTable(lut)
+        except Exception:
+            pass
         self._update_slice_plot()
         if restyled:
             self.plotter.render()
@@ -1083,9 +1200,11 @@ class VtiWindow(QtWidgets.QMainWindow):
         if self.plotter is None or self.grid is None:
             return
 
+        self._rebuild_timer.stop()
         self.plotter.clear()
         # clear() invalidates them; anything holding on would restyle a corpse.
         self._volume_actor = None
+        self._volume_scale = None
         self._slice_actor = None
         self._slice_avg_actor = None
         self.plotter.set_background(self._theme["background"])

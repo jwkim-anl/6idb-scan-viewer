@@ -26,7 +26,7 @@ dependencies = [
 notebook = ["pandas>=2.0", "xarray>=2024.1", "matplotlib>=3.6"]
 # Reciprocal space: the conversion and the gridding.
 # pyvista >=0.45: 0.44 rescaled volume data to 0..255, which silently
-# misplaces the viewers' colour limits. See environment.yml.
+# misplaces hkl_viewer.py's colour limits. See environment.yml.
 hkl = ["xrayutilities>=1.7", "pyvista>=0.45"]
 # The five windows. Not needed to use the package.
 gui = ["pyqt5>=5.15,<6", "pyqtgraph>=0.13", "pyvistaqt>=0.11", "vtk>=9.2",
