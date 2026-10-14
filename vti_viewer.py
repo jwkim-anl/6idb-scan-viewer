@@ -227,6 +227,20 @@ class VtiWindow(QtWidgets.QMainWindow):
         self.show_volume_check.toggled.connect(self.refresh_view)
         form.addRow(self.show_volume_check)
 
+        self.full_quality_check = QtWidgets.QCheckBox("Full quality while rotating")
+        self.full_quality_check.setToolTip(
+            "A volume is drawn by casting a ray through every pixel and\n"
+            "sampling the data along it. Normally VTK widens that sampling\n"
+            "while the camera moves, so a drag stays responsive, and\n"
+            "sharpens again the moment it stops -- which is the blur you\n"
+            "see while rotating a full-resolution map.\n\n"
+            "Tick this to sample at full quality all the time. Worth it on\n"
+            "a cropped grid, where there is nothing to save; expensive on a\n"
+            "whole one, which here is 83 million cells."
+        )
+        self.full_quality_check.toggled.connect(self._quality_changed)
+        form.addRow(self.full_quality_check)
+
         self.show_slice_check = QtWidgets.QCheckBox("Show slice")
         self.show_slice_check.toggled.connect(self._slice_shown_toggled)
         form.addRow(self.show_slice_check)
@@ -990,13 +1004,37 @@ class VtiWindow(QtWidgets.QMainWindow):
                 f"Volume rendering failed: {type(exc).__name__}: {exc}"
             )
             return
+        self._apply_quality()
+
+    def _apply_quality(self):
+        """Tell the mapper whether it may coarsen while the camera moves.
+
+        VTK's own default is to coarsen, which is what makes a drag of a
+        big volume responsive and what makes it look soft while it moves.
+        The tick turns that off, so every frame of a rotation is sampled
+        as finely as a still one.
+        """
+        if self._volume_actor is None:
+            return
         try:
-            # Off by default, which means every frame of a rotation is rendered
-            # at full quality. On, VTK coarsens the ray sampling while the
-            # camera is moving and sharpens again once it stops.
-            self._volume_actor.mapper.SetAutoAdjustSampleDistances(True)
+            self._volume_actor.mapper.SetAutoAdjustSampleDistances(
+                not self.full_quality_check.isChecked())
         except Exception:
             pass
+
+    def _quality_changed(self, _checked=None):
+        """Flip it on the volume already drawn, rather than rebuilding it.
+
+        Nothing about the data or the colours has changed; handing VTK a
+        grid of tens of millions of cells again to answer a question
+        about sampling would take seconds for no reason.
+        """
+        self._apply_quality()
+        if self.plotter is not None:
+            try:
+                self.plotter.render()
+            except Exception:
+                pass
 
     def _restyle(self):
         """Recolour what is already drawn, without rebuilding it.
