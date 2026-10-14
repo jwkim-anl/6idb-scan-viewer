@@ -25,7 +25,9 @@ dependencies = [
 # Tables and labelled arrays: da6idb.session, i.e. the notebook objects.
 notebook = ["pandas>=2.0", "xarray>=2024.1", "matplotlib>=3.6"]
 # Reciprocal space: the conversion and the gridding.
-hkl = ["xrayutilities>=1.7", "pyvista>=0.44"]
+# pyvista >=0.45: 0.44 rescaled volume data to 0..255, which silently
+# misplaces the viewers' colour limits. See environment.yml.
+hkl = ["xrayutilities>=1.7", "pyvista>=0.45"]
 # The five windows. Not needed to use the package.
 gui = ["pyqt5>=5.15,<6", "pyqtgraph>=0.13", "pyvistaqt>=0.11", "vtk>=9.2",
        "matplotlib>=3.6"]

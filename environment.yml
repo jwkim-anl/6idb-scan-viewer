@@ -33,6 +33,15 @@
 # Drop those four lines if that machine will not use it; the other two viewers
 # are unaffected. The 3D view needs a real OpenGL context, so it will not
 # render over a plain SSH session without X11 GLX or VirtualGL.
+#
+# pyvista must be 0.45 or newer, and the floor is not cosmetic. Up to 0.44
+# add_volume clipped the data to the colour limits and stretched its own copy
+# over 0..255, so a volume's transfer functions were addressed in that range.
+# From 0.45 the values go to the mapper untouched and the transfer functions
+# are in data units instead. The colour-limit code in vti_viewer.py and
+# hkl_viewer.py assumes the latter. Against 0.44 it still imports, still runs
+# and still draws -- it just paints the colour map over the wrong window, with
+# nothing raised to say so.
 
 name: bluesky-scan-viewer
 
@@ -58,7 +67,7 @@ dependencies:
 
   # --- hkl_viewer.py (the 3D map) ---
   - xrayutilities >=1.7   # area-detector Q conversion; tested 1.7.10
-  - pyvista >=0.44        # tested 0.46.3
+  - pyvista >=0.45        # 0.44 rescales volumes to 0..255; tested 0.46.3
   - pyvistaqt >=0.11      # Qt interactor; tested 0.11.3
   - vtk >=9.2             # tested 9.5.2
 
