@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from da6idb.files import master_path_for_image, scan_number
+from da6idb.files import image_path_for_master, master_path_for_image, scan_number
 from da6idb.hkl.geometry import read_geometry
 from da6idb.hkl.grid import GridCancelled, grid_to_vti, natural_step
 
@@ -53,11 +53,36 @@ def parse_scans(text):
     return unique
 
 def find_scans(folder):
-    """``{scan number: image path}`` for the pva files in *folder*."""
-    found = {}
-    for path in sorted(Path(folder).glob("pva*.h5")):
+    """``{scan number: image path}`` for the scans in *folder*.
+
+    Keyed off the masters, not off the image files. Where the detector wrote
+    is no longer something a name in this directory can answer: a master may
+    record a relative path into a parallel tree
+    (``../lambda/<run>/test_00020.h5``), or sit beside a file named after the
+    scan alone with no ``pva`` about it. :func:`image_path_for_master` knows
+    every one of those routes -- it is what the image viewer resolves with --
+    and a glob for ``pva*.h5`` knows exactly one.
+
+    Image files with no master beside them are picked up afterwards, so a
+    folder of bare ``pva*.h5`` goes on working as it did.
+
+    Two series sharing a directory can collide on a scan number -- see
+    :func:`~da6idb.files.scan_tags` -- and one key can only hold one of them.
+    The last in sorted order wins, which is what the glob did before.
+    """
+    folder = Path(folder)
+    found: dict[int, Path] = {}
+    for master in sorted(folder.glob("*_master.*")):
+        image = image_path_for_master(master)
+        if image is None:
+            continue
         try:
-            found[int(scan_number(path))] = path
+            found[int(scan_number(master))] = image
+        except ValueError:
+            continue
+    for path in sorted(folder.glob("pva*.h5")):
+        try:
+            found.setdefault(int(scan_number(path)), path)
         except ValueError:
             continue
     return found
@@ -97,7 +122,7 @@ def grid_scans(
             on_start(number, image)
 
         if image is None:
-            results.append((number, None, "no pva*.h5 with that scan number"))
+            results.append((number, None, "no image file for that scan number"))
             if on_done is not None:
                 on_done(*results[-1])
             continue

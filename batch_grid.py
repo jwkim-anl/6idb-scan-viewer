@@ -1,9 +1,11 @@
 """Grid a run of scans onto one common HKL lattice, as ``.vti`` files.
 
 One scan at a time through the HKL viewer is fine for looking; comparing a
-series means gridding them all the same way. This takes a folder of ``pva*.h5``
-files, a list of scan numbers and an HKL range, and writes one ``.vti`` per
-scan into an ``output`` folder beside them.
+series means gridding them all the same way. This takes a folder of scans, a
+list of scan numbers and an HKL range, and writes one ``.vti`` per scan into an
+``output`` folder beside them. Scans are found by their master files, so it
+does not matter whether the detector file is named ``pva_<scan>.h5``, named
+after the scan alone, or off in a tree of its own that the master points to.
 
 **The cell size is measured once, from the first scan in the list, and reused
 for every scan after it.** Given the same HKL range as well, every grid then
@@ -83,7 +85,7 @@ class BatchGridWindow(QtWidgets.QMainWindow):
         form = QtWidgets.QFormLayout(box)
         row = QtWidgets.QHBoxLayout()
         button = QtWidgets.QPushButton("Open folder…")
-        button.setToolTip("The folder holding the pva*.h5 files and their masters.")
+        button.setToolTip("The folder holding the scans' master files.")
         button.clicked.connect(lambda: self.open_folder())
         row.addWidget(button)
         self.folder_label = QtWidgets.QLabel("no folder")
@@ -230,7 +232,7 @@ class BatchGridWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.log, 1)
 
         self.status = self.statusBar()
-        self.status.showMessage("Open the folder holding the pva*.h5 files.")
+        self.status.showMessage("Open the folder holding the scan files.")
         self._range_enabled()
 
     # -- the folder and the list -------------------------------------------
@@ -264,7 +266,7 @@ class BatchGridWindow(QtWidgets.QMainWindow):
             self.start_spin.setValue(numbers[0])
             self.end_spin.setValue(numbers[-1])
         else:
-            self.found_label.setText("no pva*.h5 files in this folder")
+            self.found_label.setText("no scans in this folder")
         self._describe_selection()
 
     def fill_list(self):
@@ -449,7 +451,7 @@ class BatchGridWindow(QtWidgets.QMainWindow):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("folder", nargs="?", help="folder of pva*.h5 files (optional)")
+    parser.add_argument("folder", nargs="?", help="folder of scan files (optional)")
     args = parser.parse_args(argv)
 
     app = QtWidgets.QApplication(sys.argv[:1])
