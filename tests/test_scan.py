@@ -299,3 +299,42 @@ def test_grid_stats_reads_either_shape_of_map():
     assert stats["min_z"] == 1.0 and stats["min_at"] == (0.3, 9.0)
     assert sv.grid_stats({"x": np.array([0.0]), "y": np.array([0.0]),
                           "z": np.array([np.nan])})["max_z"] is None
+
+
+def test_two_motors_swept_together_are_not_a_map():
+    """A scan can move two motors along one line; that is a curve, not a map.
+
+    Scans 6, 9, 11 and 83 sweep a pair of coupled voltages together, so every
+    point sits on a single straight line. Asking matplotlib to colour the
+    triangles between them reaches qhull, which fails with "singular input
+    data" -- so the map has to be refused here, where the reason is known.
+    """
+    # the geometry, independent of any file
+    straight = np.linspace(0.0, 1.0, 50)
+    assert not sv.spans_an_area(straight, 2.0 * straight - 3.0)   # a diagonal
+    assert not sv.spans_an_area(straight, np.full(50, 7.0))       # y never moved
+    assert not sv.spans_an_area(np.zeros(50), straight)           # x never moved
+    assert not sv.spans_an_area([0.0, 1.0], [0.0, 1.0])           # too few points
+
+    # a fine axis against a coarse one is a map, not a line: each axis is
+    # judged against its own span, so the units cannot decide this
+    coarse, fine = np.meshgrid(np.linspace(0, 1000, 8), np.linspace(0, 1e-4, 8))
+    assert sv.spans_an_area(coarse.ravel(), fine.ravel())
+
+    if not have_example():
+        return
+    for number in ("00006", "00009", "00011", "00083"):
+        path = ROOT / "data" / f"tise2_2_{number}_master.hdf"
+        if not path.is_file():
+            continue
+        info = sv.read_scan_info(path)
+        assert len(info["motors"]) == 2        # two motors named ...
+        field = info["hints"]["detectors"][0]
+        assert sv.read_grid(path, field) is None
+        # ... and still no map to be drawn of them
+        assert sv.read_scatter(path, field) is None
+
+    # the fly grid in the same suite must not be caught by this
+    fly = ROOT / "data" / "test_26_3" / "test_00014_master.hdf"
+    if fly.is_file():
+        assert sv.read_scatter(fly, "lambda250k_stats5_total") is not None

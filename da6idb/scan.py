@@ -708,6 +708,43 @@ def read_grid(
                 return grid
     return None
 
+# How far a point cloud has to stand off its own best-fit line before it is
+# worth drawing as a map. Measured after each axis is divided by its own span,
+# so a perfectly straight sweep scores 0 and a filled raster of the order of 1.
+# The scans this rejects score 1e-16, so the exact cut hardly matters.
+SCATTER_MIN_SPREAD = 0.01
+
+
+def spans_an_area(x, y) -> bool:
+    """Whether these points cover a patch of the plane, or just a line.
+
+    Two motors named by a scan do not make it a raster. A scan can sweep both
+    together along a path -- two coupled voltages, a pair of angles held in
+    some relation -- and then every point lies on one line. There are no
+    triangles to be made of those, so matplotlib's tripcolor hands them to
+    qhull and qhull fails outright: "singular input data".
+
+    Each axis is divided by its own span before the shape is measured, so a
+    fine motor played against a coarse one is not mistaken for a line.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x, y = x[finite], y[finite]
+    if x.size < 3:
+        return False
+    x_span, y_span = float(np.ptp(x)), float(np.ptp(y))
+    if x_span <= 0.0 or y_span <= 0.0:
+        return False                     # one of the two never moved
+    points = np.column_stack(
+        ((x - x.mean()) / x_span, (y - y.mean()) / y_span)
+    )
+    largest, smallest = np.linalg.svd(points, compute_uv=False)[:2]
+    if largest <= 0.0:
+        return False
+    return bool(smallest / largest >= SCATTER_MIN_SPREAD)
+
+
 def read_scatter(
     path: Path, value_field: str, monitor_field: str = ""
 ) -> dict | None:
@@ -723,10 +760,11 @@ def read_scatter(
     this returns -- nothing is snapped to a lattice or resampled, because
     the irregularity is the measurement rather than noise in it.
 
-    ``None`` when the scan names fewer than two motors or did not record
-    them. :func:`read_grid` is the one to try first: a scan that really is
-    a raster is better drawn as one, since a lattice says which cells were
-    never visited and a cloud of points cannot.
+    ``None`` when the scan names fewer than two motors, did not record
+    them, or moved them together along a line rather than over an area --
+    see :func:`spans_an_area`. :func:`read_grid` is the one to try first: a
+    scan that really is a raster is better drawn as one, since a lattice
+    says which cells were never visited and a cloud of points cannot.
     """
     info = read_scan_info(path)
     if len(info["motors"]) != 2:
@@ -761,11 +799,17 @@ def read_scatter(
     rows = min(data[slow_name].size, data[fast_name].size, values.size)
     if rows < 3:            # fewer than a triangle: nothing to draw
         return None
+    x = np.asarray(data[fast_name][:rows], dtype=float)
+    y = np.asarray(data[slow_name][:rows], dtype=float)
+    # Two motors moved together is a curve, not a map, and asking for a map
+    # of it fails in qhull rather than anywhere this could explain.
+    if not spans_an_area(x, y):
+        return None
     return {
         "x_name": fast_name,
         "y_name": slow_name,
-        "x": np.asarray(data[fast_name][:rows], dtype=float),
-        "y": np.asarray(data[slow_name][:rows], dtype=float),
+        "x": x,
+        "y": y,
         "z": np.asarray(values[:rows], dtype=float),
         "points": int(rows),
         "scattered": True,
