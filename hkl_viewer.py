@@ -17,9 +17,11 @@ beamline records it there:
 
 - its **baseline** holds ``hkl_pvs_center_pixel``, ``hkl_pvs_distance``,
   ``hkl_pvs_pixel_direction1``/``2``, ``hkl_pvs_ub_matrix`` and ``energy``;
-- its **primary** holds the per-frame angles ``psic_mu``, ``psic_eta``,
-  ``psic_chi``, ``psic_phi`` (sample, in that order) and ``psic_nu``,
-  ``psic_delta`` (detector).
+- the angles ``psic_mu``, ``psic_eta``, ``psic_chi``, ``psic_phi`` (sample, in
+  that order) and ``psic_nu``, ``psic_delta`` (detector) are taken motor by
+  motor: from a fly scan's ``entry/frame_positions`` (one per frame), else from
+  the **primary** stream (the scanned motor, resampled onto the frames), else
+  from the **baseline**, held where it sat before the scan.
 
 The circle *directions*, the beam/reference vectors and the detector's physical
 size are not in the master at all, so those come from the image file's own
@@ -905,7 +907,8 @@ class HklWindow(QtWidgets.QMainWindow):
         """Re-read the setup window, convert, and redraw."""
         geometry = self.geometry_data
         wanted = self.setup_dialog.wants_master_angles()
-        if wanted != (geometry.sources.get("angles") == "master"):
+        from_master = str(geometry.sources.get("angles", "")).startswith("master")
+        if wanted != from_master:
             refreshed = read_geometry(
                 geometry.image_path, geometry.master_path, angles_from_master=wanted
             )

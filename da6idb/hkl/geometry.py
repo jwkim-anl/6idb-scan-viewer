@@ -21,8 +21,9 @@ import numpy as np
 import h5py
 
 from da6idb.files import IMAGE_DATA_PATH, MASTER_PRIMARY_PATH, master_path_for_image
-from da6idb.images import (FRAME_TIMESTAMP_PATH, evenly_spaced_index,
-                          nearest_index)
+from da6idb.images import (FRAME_PREFIX, FRAME_TIMESTAMP_PATH,
+                          evenly_spaced_index, nearest_index,
+                          read_frame_positions)
 
 HKL_PATH = "entry/data/metadata/HKL"
 
@@ -274,15 +275,31 @@ def _read_master_geometry(
 
         if not take_angles:
             return
-        primary = f.get(MASTER_PRIMARY_PATH)
-        if primary is None:
-            return
-        angles, clock = {}, None
-        for name in (*SAMPLE_MOTORS, *DETECTOR_MOTORS):
-            group = primary.get(name)
-            if group is None or "value" not in group:
-                return  # an incomplete set is no use; keep the image file's
-            angles[name] = np.asarray(group["value"][()], dtype=float).ravel()
+        _read_master_angles(f, master, frame_epoch, geometry)
+
+def _read_master_angles(f, master: Path, frame_epoch, geometry: HklGeometry):
+    """The six circles per frame, each from the best place the master has it.
+
+    Only the scanned motor goes into the primary stream; every other circle sat
+    still and is recorded once, in the baseline. So each motor is looked for in
+    turn in the fly scan's own per-frame record (``frame_positions``), in the
+    primary stream (resampled onto the frames), and last in the baseline, held
+    at its value from before the scan. An incomplete set is no use, and leaves
+    whatever the image file gave.
+    """
+    n_frames = geometry.n_frames
+    per_frame = read_frame_positions(master, n_frames)
+    primary = f.get(MASTER_PRIMARY_PATH)
+    baseline = f.get(BASELINE_PATH)
+
+    angles, scanned, clock = {}, {}, None
+    for name in (*SAMPLE_MOTORS, *DETECTOR_MOTORS):
+        if FRAME_PREFIX + name in per_frame:
+            angles[name] = per_frame[FRAME_PREFIX + name]
+            continue
+        group = None if primary is None else primary.get(name)
+        if group is not None and "value" in group:
+            scanned[name] = np.asarray(group["value"][()], dtype=float).ravel()
             if clock is None and "EPOCH" in group:
                 epoch = np.asarray(group["EPOCH"][()], dtype=float).ravel()
                 # The clock has to actually advance. A motor that did not move
@@ -296,11 +313,21 @@ def _read_master_geometry(
                     and np.all(np.diff(epoch) >= 0)
                 ):
                     clock = epoch
-        sizes = {int(v.size) for v in angles.values()}
+            continue
+        group = None if baseline is None else baseline.get(name)
+        if group is not None and "value_start" in group:
+            value = _first_float(group["value_start"][()])
+            if value is not None:
+                angles[name] = np.full(n_frames, value)
+                continue
+        return
+
+    source = "master (baseline)"
+    if scanned:
+        sizes = {int(v.size) for v in scanned.values()}
         if len(sizes) != 1 or sizes == {0}:
             return
         points = sizes.pop()
-
         if frame_epoch is not None and clock is not None and clock.size == points:
             index = nearest_index(np.asarray(frame_epoch, dtype=float), clock)
             source = "master"
@@ -310,13 +337,19 @@ def _read_master_geometry(
             # master either. The angles are still there, one per scan point,
             # so spread the frames over them by position, exactly as
             # ``read_scan_channels`` does for the scan's other channels.
-            index = evenly_spaced_index(geometry.n_frames, points)
+            index = evenly_spaced_index(n_frames, points)
             source = "master (by position)"
-        if index.size != geometry.n_frames:
+        if index.size != n_frames:
             return
-        geometry.sample_angles = np.vstack([angles[n][index] for n in SAMPLE_MOTORS])
-        geometry.detector_angles = np.vstack([angles[n][index] for n in DETECTOR_MOTORS])
-        mark["angles"] = source
+        angles.update({name: values[index] for name, values in scanned.items()})
+    if len(angles) < len(SAMPLE_MOTORS) + len(DETECTOR_MOTORS):
+        return
+    if any(FRAME_PREFIX + name in per_frame for name in angles):
+        # A fly scan's writer saying where each frame was beats any matching.
+        source = "master (frame positions)"
+    geometry.sample_angles = np.vstack([angles[n] for n in SAMPLE_MOTORS])
+    geometry.detector_angles = np.vstack([angles[n] for n in DETECTOR_MOTORS])
+    geometry.sources["angles"] = source
 
 def _as_floats(value, count):
     values = [float(v) for v in np.asarray(value, dtype=float).ravel()]

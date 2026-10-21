@@ -251,3 +251,47 @@ def test_the_example_still_takes_its_angles_from_the_image():
     if not have_example():
         return
     assert hv.read_geometry(EXAMPLE_IMAGE).sources["angles"] == "image"
+
+
+def _master_with_baseline_angles(path, points=5, frame_phi=None):
+    """A newer master: phi scanned, every other circle only in the baseline."""
+    import h5py
+    from helpers import write_master
+    baseline = {"psic_mu": 0.0, "psic_eta": 17.5, "psic_chi": 90.0,
+                "psic_phi": 0.25, "psic_nu": 0.0, "psic_delta": 36.1}
+    phi = np.linspace(0.0, 0.5, points)
+    write_master(path, points=points, motors=("psic_phi",),
+                 extra_primary={"psic_phi": phi}, baseline=baseline)
+    if frame_phi is not None:
+        with h5py.File(path, "a") as f:
+            f.create_dataset("entry/frame_positions/psic_phi", data=frame_phi)
+            f.create_dataset("entry/frame_positions/in_scan",
+                             data=np.ones(len(frame_phi), dtype=bool))
+    return baseline, phi
+
+
+def test_unscanned_angles_come_from_the_baseline():
+    from helpers import write_image
+    with Sandbox() as d:
+        baseline, phi = _master_with_baseline_angles(d / "s_00007_master.hdf")
+        write_image(d / "s_00007.h5", frames=5, shape=(8, 8),
+                    timestamps=False, rois=False)
+        g = hv.read_geometry(d / "s_00007.h5", d / "s_00007_master.hdf")
+        assert g.sources["angles"] == "master (by position)"
+        assert np.allclose(g.sample_angles[3], phi)          # scanned, from primary
+        assert np.allclose(g.sample_angles[1], baseline["psic_eta"])
+        assert np.allclose(g.detector_angles[1], baseline["psic_delta"])
+
+
+def test_a_fly_scan_takes_the_scanned_angle_from_its_frame_positions():
+    from helpers import write_image
+    with Sandbox() as d:
+        frame_phi = np.linspace(-0.1, 0.6, 7)                # more frames than points
+        baseline, _ = _master_with_baseline_angles(
+            d / "s_00007_master.hdf", frame_phi=frame_phi)
+        write_image(d / "s_00007.h5", frames=7, shape=(8, 8),
+                    timestamps=False, rois=False)
+        g = hv.read_geometry(d / "s_00007.h5", d / "s_00007_master.hdf")
+        assert g.sources["angles"] == "master (frame positions)"
+        assert np.allclose(g.sample_angles[3], frame_phi)
+        assert np.allclose(g.sample_angles[2], baseline["psic_chi"])

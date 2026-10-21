@@ -338,3 +338,13 @@ def test_two_motors_swept_together_are_not_a_map():
     fly = ROOT / "data" / "test_26_3" / "test_00014_master.hdf"
     if fly.is_file():
         assert sv.read_scatter(fly, "lambda250k_stats5_total") is not None
+
+
+def test_scan_hkl_reads_the_baseline_where_the_primary_lacks_it():
+    with Sandbox() as d:
+        path = write_master(d / "s_00001_master.hdf", points=5,
+                            extra_primary={"psic_l": np.linspace(1.0, 2.0, 5)},
+                            baseline={"psic_h": 1.0, "psic_k": -0.5, "psic_l": 9.0})
+        (h, _), (k, _), (l, l_spread) = sv.scan_hkl(path)
+        assert (h, k) == (1.0, -0.5)
+        assert np.isclose(l, 1.5) and l_spread > 0           # scanned: per point

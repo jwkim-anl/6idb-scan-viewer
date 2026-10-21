@@ -354,7 +354,9 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.hkl_label.setWordWrap(True)
         self.hkl_label.setStyleSheet("color: gray;")
         self.hkl_label.setToolTip(
-            "The diffractometer's own psic_h/k/l, averaged over the scan.\n"
+            "The diffractometer's own psic_h/k/l, averaged over the scan --\n"
+            "per point where the scan recorded it, else the baseline's\n"
+            "before/after readings.\n"
             "A spread is shown for any axis that moved -- on a rocking curve\n"
             "one of the three sweeps while the others hold still."
         )

@@ -581,6 +581,11 @@ def scan_hkl(path: Path):
     The spread matters as much as the mean: on a rocking curve one of the three
     sweeps across the peak while the others hold still, and a bare average
     would read like a fixed position.
+
+    Newer scans record psic_h/k/l in the baseline, before and after, and only
+    put one in the primary stream when the plan scanned it. So each is taken
+    point by point from the primary where it is there, and otherwise from the
+    baseline's before/after pair.
     """
     path = Path(path)
     try:
@@ -591,24 +596,39 @@ def scan_hkl(path: Path):
     if key is not None and key in _SCAN_HKL_CACHE:
         return _SCAN_HKL_CACHE[key]
 
-    result = None
-    if set(PSIC_HKL_FIELDS) <= set(stream_fields(path, "primary")):
-        try:
-            data = read_primary(path, list(PSIC_HKL_FIELDS))
-        except OSError:
-            data = {}
+    gathered = []
+    try:
+        with h5py.File(path, "r") as f:
+            primary = f.get(PRIMARY_PATH)
+            baseline = f.get(BASELINE_PATH)
+            for name in PSIC_HKL_FIELDS:
+                values = _hkl_values(primary, baseline, name)
+                values = values[np.isfinite(values)]
+                if values.size == 0:
+                    gathered = []
+                    break
+                gathered.append((float(values.mean()), float(values.std())))
+    except OSError:
         gathered = []
-        for name in PSIC_HKL_FIELDS:
-            values = np.asarray(data.get(name, ()), dtype=float).ravel()
-            values = values[np.isfinite(values)]
-            if values.size == 0:
-                gathered = []
-                break
-            gathered.append((float(values.mean()), float(values.std())))
-        result = tuple(gathered) if gathered else None
+    result = tuple(gathered) if gathered else None
     if key is not None:
         _SCAN_HKL_CACHE[key] = result
     return result
+
+def _hkl_values(primary, baseline, name: str) -> np.ndarray:
+    """*name*'s readings: the primary's per point, else the baseline's pair."""
+    item = None if primary is None else primary.get(name)
+    if isinstance(item, h5py.Group) and "value" in item:
+        return np.asarray(item["value"][()], dtype=float).ravel()
+    item = None if baseline is None else baseline.get(name)
+    if isinstance(item, h5py.Group):
+        if "value_start" in item and "value_end" in item:
+            return np.asarray(
+                [item["value_start"][()], item["value_end"][()]], dtype=float
+            ).ravel()
+        if "value" in item:
+            return np.asarray(item["value"][()], dtype=float).ravel()
+    return np.empty(0)
 
 def format_scan_hkl(values, decimals: int = 4) -> str:
     """``H 1.0135  K -0.4926 ± 0.0386  L 7.4840`` for one scan."""
