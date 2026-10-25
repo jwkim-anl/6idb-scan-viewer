@@ -13,10 +13,15 @@ the pvapy streaming consumer:
 | **`vti_viewer.py`** | opens a saved `.vti` on its own, with no beamline data |
 | **`slice_plot.py`** | the slice plane as a flat image, with H/K/L axes |
 | **`da6idb/`** | the package underneath all of them, usable from a notebook |
+| **`da6idb_mcp/`** | all of it again as tools an LLM can call — numbers and plots in the reply |
 
 They chain together: the scan browser opens the image viewer for whatever scan you
 have selected, and the image viewer opens the HKL map for the file it is showing.
 Each also runs on its own from the command line.
+
+There are three ways in, and they are the same code underneath: the windows, the
+package in a notebook or script, and an [MCP server](#da6idb_mcp--the-same-thing-from-a-conversation)
+that puts all of it in front of a model.
 
 `volume_style.py` holds the colours, number format and spin box the two 3D windows
 share, so they cannot drift apart.
@@ -103,9 +108,10 @@ so selecting a plane is `sel(L=7.52, method="nearest")` rather than an index, an
 both draw themselves. A grid made in a notebook is the same cached `.vti` the
 viewers read, so it opens in either.
 
-`examples/getting-started.ipynb` walks through all of it against the scan that
-ships with this repository. It adds the repository root to `sys.path` if the
-package is not installed, so it runs from a fresh clone either way. **[`docs/api.md`](docs/api.md)** lists every public
+[`examples/da6idb_example.ipynb`](examples/da6idb_example.ipynb) walks through
+all of it against the scan that ships with this repository. It adds the
+repository root to `sys.path` if the package is not installed, so it runs from a
+fresh clone either way. **[`docs/api.md`](docs/api.md)** lists every public
 function, generated from the source.
 
 ### Installing
@@ -152,9 +158,28 @@ python -m da6idb_mcp --list                    # the tool names; needs no mcp
 python -m da6idb_mcp --folder data             # the server itself, on stdio
 ```
 
-`mcp` is the one new dependency. `.mcp.json` at the root registers it for Claude
-Code; set `DA6IDB_PYTHON` to the interpreter that has the package if it is not
-the one on your path.
+`mcp` is the one new dependency, and nothing else here needs it — `--list` and
+the whole test suite run without it. `.mcp.json` at the root registers the
+server for Claude Code, with `--folder data` so a bare scan number resolves;
+set `DA6IDB_PYTHON` to the interpreter that has the package if it is not the one
+on your path, and `DA6IDB_DATA` to point it at a beamtime instead. There is
+nothing to start — the client spawns it, and the viewer windows are opened by
+the model when a `viewer_*` tool asks for one.
+
+| | |
+|---|---|
+| `scan_*` (11) | `list` `info` `fields` `curve` `statistics` `fit` `map` `baseline` `hkl_position` `trend` `export` |
+| `image_*` (10) | `info` `frame` `channels` `rois` `roi_rect` `roi_curve` `roi_series` `projection` `two_theta` `geometry` |
+| `hkl_*` (10) | `sources` `setup_read` `setup_write` `setup_delete` `extent` `resolution` `cloud` `grid` `slice` `cut` |
+| `vti_*` (6) | `list` `info` `slice` `cut` `export_image` `export_cut` |
+| `batch_*` (2), jobs (3) | `find` `grid_scans`; `job_status` `job_cancel` `job_list` |
+| `viewer_*` (7) | `list` `open` `close` `state` `set_state` `screenshot` `call` |
+| admin (3) | `cache_status` `cache_clear` `da6idb_eval` |
+
+Nothing is reimplemented: each tool wraps a function [`docs/api.md`](docs/api.md)
+already lists. The long ones — `hkl_grid`, `batch_grid_scans` — return inside
+`wait_seconds` where the `.vti` is already cached, and otherwise hand back a job
+id to poll and cancel.
 
 Two layers. The headless tools — `scan_*`, `image_*`, `hkl_*`, `vti_*`,
 `batch_*` — compute through `da6idb` and draw with Agg, so they need no window
@@ -165,8 +190,24 @@ they say so in one sentence and nothing else is affected. `da6idb_eval` runs a
 snippet against the very objects the other tools built, for the question nobody
 wrote a tool for.
 
-**[`docs/mcp.md`](docs/mcp.md)** has the tool list, the flags, and why it is
-built in two processes.
+The live layer is seven generic tools rather than one per control, because the
+windows' own methods read widget state and have no arguments to drive. Each
+window grew `state()` and `set_state()`, so a model reads the settings as a flat
+dict and sends back only the keys it wants changed:
+
+```
+viewer_open(kind="image", target=152)        -> {"window": "image1", ...}
+viewer_state(window="image1")                -> {"frame": 0, "colormap": …, "log": False, …}
+viewer_set_state(window="image1", frame=37, log=True)
+viewer_screenshot(window="image1")
+```
+
+A read is served *while* a window is in the middle of a long gridding run, so you
+can watch a batch go; a write is refused with what it is busy with and for how
+long.
+
+**[`docs/mcp.md`](docs/mcp.md)** has the flags, the Claude Desktop
+configuration, the caching, and the full argument for the two processes.
 
 ---
 
@@ -761,11 +802,12 @@ of 26.9 M.
 
 ## Example data
 
-One scan is included so the viewers can be tried without beamline data:
+One scan is included so the viewers can be tried without beamline data, in
+`data/` — which is also where `--folder` points the MCP server by default:
 
 ```
-tise2_2_00152_master.hdf     1.5 MB
-pva_tise2_2_00152.h5        20.0 MB
+data/tise2_2_00152_master.hdf     1.5 MB
+data/pva_tise2_2_00152.h5        20.0 MB
 ```
 
 Scan 152 is a `rel_scan` rocking `psic_eta` from 20.692° to 22.692° over 101
@@ -779,11 +821,12 @@ From a clone:
 
 ```bash
 conda env create -f environment.yml && conda activate bluesky-scan-viewer
-python scan_viewer.py .          # scan 152 appears in the listing, Img ✓
+python scan_viewer.py data       # scan 152 appears in the listing, Img ✓
 ```
 
 Tick a Y field to plot it, then **Load Image…** for the frames and **HKL 3D…** for
-the reciprocal-space map.
+the reciprocal-space map. Or, with the MCP server registered, ask for scan 152's
+rocking curve and read the answer off the plot it sends back.
 
 ## The rest of the data is not in this repository
 

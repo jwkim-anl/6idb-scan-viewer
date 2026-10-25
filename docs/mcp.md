@@ -107,10 +107,10 @@ The live layer is six generic tools rather than one per control.
 takes the same dict back, so you change one key and leave the rest:
 
 ```
-viewer_open(kind="image", target=152)
-viewer_state(window="image-1")        -> {"frame": 0, "colormap": "viridis", ...}
-viewer_set_state(window="image-1", frame=37, log_scale=True)
-viewer_screenshot(window="image-1")
+viewer_open(kind="image", target=152)        -> {"window": "image1", ...}
+viewer_state(window="image1")                -> {"frame": 0, "colormap": …, "log": False, …}
+viewer_set_state(window="image1", frame=37, log=True)
+viewer_screenshot(window="image1")
 ```
 
 `w.set_state(w.state())` is a no-op for all five windows, and the test suite
