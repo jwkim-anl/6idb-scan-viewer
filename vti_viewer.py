@@ -26,6 +26,7 @@ import numpy as np
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+import viewer_state
 from da6idb.hkl.grid import LoadedGrids, make_drawable
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
@@ -1251,6 +1252,129 @@ class VtiWindow(QtWidgets.QMainWindow):
                 self.plotter.reset_camera()
             self._needs_camera_reset = False
         self._update_slice_plot()
+
+    # -- the panel as a dict -----------------------------------------------
+
+    def _about(self) -> dict:
+        """What the window worked out, as against what it was told."""
+        about = {
+            "file": str(self.path) if self.path is not None else None,
+            "folder": str(self.folder) if self.folder is not None else None,
+            "files": [self.file_list.item(row).text()
+                      for row in range(self.file_list.count())],
+            "slice_plot_open": bool(self._slice_window is not None
+                                    and self._slice_window.isVisible()),
+        }
+        if self.grid is None:
+            return about
+        flat = self.grid.bounds
+        about.update(
+            dimensions=[int(n) for n in self.grid.dimensions],
+            spacing=[float(s) for s in self.grid.spacing],
+            bounds={name: [float(flat[2 * i]), float(flat[2 * i + 1])]
+                    for i, name in enumerate(AXIS_NAMES)},
+            measured_range=[float(self.span[0]), float(self.span[1])],
+        )
+        return about
+
+    def state(self) -> dict:
+        """Everything the panel says, as a dict :meth:`set_state` takes back.
+
+        See :mod:`viewer_state` for what the pair is for and the rules
+        they keep. Which file is open is *not* in here -- it is under
+        ``"about"``, with the map's size and bounds -- because opening
+        one is :meth:`load`'s job, not a setting.
+        """
+        placement = self.slice_placement
+        return {
+            "keep_setup": self.keep_check.isChecked(),
+            "colormap": self.cmap_combo.currentText(),
+            "background": self.background_combo.currentText(),
+            "show_volume": self.show_volume_check.isChecked(),
+            "full_quality": self.full_quality_check.isChecked(),
+            "intensity_min": float(self.int_min_spin.value()),
+            "intensity_max": float(self.int_max_spin.value()),
+            "intensity_auto": self.int_auto_check.isChecked(),
+            "hkl_range": {name: [float(low.value()), float(high.value())]
+                          for name, (low, high) in self.hkl_spins.items()},
+            "hkl_auto": self.hkl_auto_check.isChecked(),
+            "slice_normal": [float(w.value()) for w in self.slice_normal_spins],
+            "slice_point": [float(v) for v in placement.point()],
+            "slice_offset": placement.offset(),
+            "slice_by_point": placement.uses_point(),
+            "slice_step": float(self.slice_step_spin.value()),
+            "slice_average": int(self.slice_avg_spin.value()),
+            "show_slice": self.show_slice_check.isChecked(),
+            "slice_lock": self.slice_lock_check.isChecked(),
+            viewer_state.ABOUT: self._about(),
+        }
+
+    def _set_hkl_range(self, ranges):
+        """The crop box as ``{"H": [low, high], ...}``; axes may be left out."""
+        if not isinstance(ranges, dict):
+            raise TypeError('hkl_range is {"H": [low, high], ...}')
+        unknown = set(ranges) - set(self.hkl_spins)
+        if unknown:
+            raise ValueError(f"no axis {', '.join(sorted(unknown))}; "
+                             f"hkl_range takes {', '.join(self.hkl_spins)}")
+        for name, bounds in ranges.items():
+            low, high = viewer_state.pair(bounds, f"hkl_range[{name!r}]")
+            self.hkl_spins[name][0].setValue(low)
+            self.hkl_spins[name][1].setValue(high)
+
+    def _set_slice_normal(self, normal):
+        for widget, value in zip(self.slice_normal_spins,
+                                 viewer_state.triple(normal, "slice_normal")):
+            widget.setValue(value)
+
+    def _set_slice_point(self, point):
+        for widget, value in zip(self.slice_placement.point_spins,
+                                 viewer_state.triple(point, "slice_point")):
+            widget.setValue(value)
+
+    def set_state(self, state) -> list:
+        """Drive the panel from a dict, then redraw once.
+
+        The window is held quiet while the values go in, so a dict that
+        changes twelve things costs one redraw rather than twelve.
+        Returns the settings applied, in the order they were.
+        """
+        placement = self.slice_placement
+        setters = {
+            "keep_setup": self.keep_check.setChecked,
+            "colormap": lambda v: viewer_state.choose(
+                self.cmap_combo, v, "colormap"),
+            "background": lambda v: viewer_state.choose(
+                self.background_combo, v, "background"),
+            "show_volume": self.show_volume_check.setChecked,
+            "full_quality": self.full_quality_check.setChecked,
+            # The limits before the tick: Auto overwrites the boxes with the
+            # file's own range, so a dict holding both must mean the tick.
+            "intensity_min": lambda v: self.int_min_spin.setValue(float(v)),
+            "intensity_max": lambda v: self.int_max_spin.setValue(float(v)),
+            "intensity_auto": self.int_auto_check.setChecked,
+            "hkl_range": self._set_hkl_range,
+            "hkl_auto": self.hkl_auto_check.setChecked,
+            "slice_normal": self._set_slice_normal,
+            # Both placements go in and the tick then says which is in force;
+            # the offset is written straight to the box rather than through
+            # set_offset, which would untick the point.
+            "slice_point": self._set_slice_point,
+            "slice_offset": lambda v: placement.offset_spin.setValue(float(v)),
+            "slice_by_point": placement.use_point_check.setChecked,
+            "slice_step": lambda v: self.slice_step_spin.setValue(float(v)),
+            "slice_average": lambda v: self.slice_avg_spin.setValue(int(v)),
+            "show_slice": self.show_slice_check.setChecked,
+            "slice_lock": self.slice_lock_check.setChecked,
+        }
+        was, self._updating = self._updating, True
+        try:
+            done = viewer_state.apply(state, setters)
+        finally:
+            self._updating = was
+        self._slice_controls_enabled()
+        self.refresh_view()
+        return done
 
     def _report(self):
         if self.grid is None:

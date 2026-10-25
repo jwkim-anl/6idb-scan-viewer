@@ -46,6 +46,8 @@ from da6idb.hkl.grid import measured_range
 from volume_style import AXIS_NAMES
 from volume_style import spin as _spin
 
+import viewer_state
+
 
 
 
@@ -447,6 +449,126 @@ class BatchGridWindow(QtWidgets.QMainWindow):
         for number, note in failed:
             self._note(f"  scan {number}: {note}")
         self.status.showMessage(f"{summary} — {self.folder / OUTPUT_DIRECTORY}")
+
+    # -- the panel as a dict -----------------------------------------------
+
+    @staticmethod
+    def _amount(spin, value, what):
+        """Set a fractional spin box, or say so rather than clamp.
+
+        :func:`viewer_state.within` does this for whole numbers; the
+        cell size and the six range ends are the places here that take
+        a fraction.
+        """
+        number = float(value)
+        low, high = spin.minimum(), spin.maximum()
+        if not low <= number <= high:
+            raise ValueError(f"{what} must be {low:g}..{high:g}; got {number:g}")
+        spin.setValue(number)
+
+    def _about(self) -> dict:
+        """What the folder holds, as against what it was told to grid."""
+        numbers = self.selected()
+        return {
+            "folder": str(self.folder) if self.folder is not None else None,
+            "output_folder": (str(self.folder / OUTPUT_DIRECTORY)
+                              if self.folder is not None else None),
+            "scans_available": sorted(self.found),
+            "scans_chosen": numbers,
+            "scans_missing": [n for n in numbers if n not in self.found],
+            "setup": self.setup_label.text(),
+            "running": bool(self._running),
+        }
+
+    def state(self) -> dict:
+        """Everything the panel says, as a dict :meth:`set_state` takes back.
+
+        See :mod:`viewer_state` for what the pair is for and the rules
+        they keep. Which folder is open is *not* in here -- it is under
+        ``"about"``, with the scans found in it -- because opening one
+        is :meth:`open_folder`'s job, not a setting.
+
+        ``scans`` is the line as it is written rather than the numbers
+        it comes to, so ``"157-160"`` survives the trip as itself. Put
+        a list back instead and it is written out as one.
+        """
+        return {
+            "scans": self.scans_edit.text(),
+            "first": int(self.start_spin.value()),
+            "last": int(self.end_spin.value()),
+            "every": int(self.step_spin.value()),
+            "hkl_range": {name: [float(low.value()), float(high.value())]
+                          for name, (low, high) in self.hkl_spins.items()},
+            "whole_extent": self.whole_check.isChecked(),
+            "oversample": float(self.oversample_spin.value()),
+            "transmission": self.transmission_check.isChecked(),
+            "reuse": self.reuse_check.isChecked(),
+            viewer_state.ABOUT: self._about(),
+        }
+
+    def _set_scans(self, scans):
+        """Write the list of scan numbers, from a line or from a list."""
+        if isinstance(scans, (list, tuple)):
+            text = ", ".join(str(int(number)) for number in scans)
+        else:
+            text = str(scans)
+        # The window's own reader shrugs a bad line off as "nothing
+        # chosen", which from here would look like it worked.
+        if text.strip():
+            parse_scans(text)
+        self.scans_edit.setText(text)
+
+    def _set_hkl_range(self, ranges):
+        """Place the box the grids share, one axis or all three."""
+        if not isinstance(ranges, dict):
+            raise TypeError('hkl_range is {"H": [low, high], ...}, not '
+                            f"{type(ranges).__name__}")
+        unknown = set(ranges) - set(self.hkl_spins)
+        if unknown:
+            raise ValueError(f"no such axis: {', '.join(sorted(unknown))}. "
+                             f"Axes: {', '.join(self.hkl_spins)}")
+        for name, bounds in ranges.items():
+            low, high = viewer_state.pair(bounds, f"the {name} range")
+            if low >= high:
+                raise ValueError(f"the {name} range runs low to high; got "
+                                 f"{low:g} to {high:g}")
+            self._amount(self.hkl_spins[name][0], low, f"{name} low")
+            self._amount(self.hkl_spins[name][1], high, f"{name} high")
+
+    def set_state(self, state) -> list:
+        """Drive the panel from a dict. Returns the settings applied.
+
+        The range goes in before the tick above it: ticking "whole
+        extent" greys the six boxes out, so a dict holding both means
+        the tick, and it is applied last and wins.
+
+        Nothing here is applied while a run is going. The settings are
+        read once, at the top of :meth:`run`, and the log and the
+        progress bar are written against them for minutes afterwards --
+        so a dict landing mid-run would change what the window says it
+        is doing without changing what it does.
+        """
+        if self._running:
+            raise RuntimeError("the gridder is running; stop it before "
+                               "changing what it grids")
+        setters = {
+            "scans": self._set_scans,
+            "first": lambda v: viewer_state.within(
+                self.start_spin, v, "the first scan"),
+            "last": lambda v: viewer_state.within(
+                self.end_spin, v, "the last scan"),
+            "every": lambda v: viewer_state.within(
+                self.step_spin, v, "every"),
+            "hkl_range": self._set_hkl_range,
+            "whole_extent": self.whole_check.setChecked,
+            "oversample": lambda v: self._amount(
+                self.oversample_spin, v, "the cell size"),
+            "transmission": self.transmission_check.setChecked,
+            "reuse": self.reuse_check.setChecked,
+        }
+        done = viewer_state.apply(state, setters)
+        self._range_enabled()
+        return done
 
 
 def main(argv=None) -> int:

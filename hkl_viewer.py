@@ -49,6 +49,7 @@ import xrayutilities as xu
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+import viewer_state
 from volume_style import AXIS_NAMES
 from volume_style import AXIS_NUMBER_FORMAT
 from volume_style import BACKGROUNDS
@@ -903,6 +904,52 @@ class HklWindow(QtWidgets.QMainWindow):
 
     # -- compute and draw --------------------------------------------------
 
+    def load(self, image_path, master_path=None):
+        """Show another scan in this window, in place of the one in it.
+
+        Until now the geometry was read once, in the constructor, and a
+        different file meant a different window. Stepping along a series
+        of scans is the common case, and the display panel -- colours,
+        the intensity range, the HKL box, where the slice sits -- is
+        worth keeping across the step, so this replaces the data and
+        leaves the panel alone.
+
+        What does not carry over is the conversion setup: it is read
+        afresh from the new pair of files and the folder's
+        ``hkl_setup.json``, so anything typed into the setup window and
+        not saved to the folder is gone. Any grid made for the old scan
+        is dropped rather than rebuilt; press Grid again for one.
+        """
+        geometry = read_geometry(Path(image_path), master_path)
+
+        previous = self.setup_dialog
+        # The old dialog's widgets describe the old instrument. Rebuilding
+        # is both simpler and more honest than trying to retune them.
+        self.geometry_data = geometry
+        self.setup_dialog = ConversionSetupDialog(geometry, self)
+        self.setup_dialog.applied.connect(self.recompute)
+        showing = previous.isVisible()
+        previous.close()
+        previous.deleteLater()
+
+        self.cloud = None
+        self.grid = self.grid_path = self.grid_range = None
+        self._updating = True
+        try:
+            self.grid_label.setText("none")
+            self.show_volume_check.setChecked(False)
+            self.show_volume_check.setEnabled(False)
+            self.show_points_check.setChecked(True)
+        finally:
+            self._updating = False
+
+        self.setWindowTitle(f"HKL 3D — {geometry.image_path.name}")
+        self._needs_camera_reset = True
+        self.recompute()
+        if showing:
+            self.show_setup()
+        return geometry
+
     def recompute(self):
         """Re-read the setup window, convert, and redraw."""
         geometry = self.geometry_data
@@ -1285,6 +1332,201 @@ class HklWindow(QtWidgets.QMainWindow):
             except Exception:
                 self.plotter.reset_camera()
             self._needs_camera_reset = False
+
+    # -- the panel as a dict -----------------------------------------------
+
+    def _conversion_state(self) -> dict:
+        """The settings that decide the cloud, as against how it is drawn."""
+        dialog = self.setup_dialog
+        arguments = dialog.conversion_arguments()
+        return {
+            "first_frame": int(arguments["first"]),
+            "last_frame": int(arguments["last"]),
+            "frame_step": int(arguments["step"]),
+            "threshold": float(arguments["threshold"]),
+            "max_points": int(arguments["max_points"]),
+            "master_angles": dialog.wants_master_angles(),
+            "transmission": dialog.transmission_check.isChecked(),
+        }
+
+    def _about(self) -> dict:
+        """What the window worked out, as against what it was told.
+
+        The instrument itself -- UB, circle directions, the reference
+        vectors -- is deliberately not here: it belongs to the folder,
+        not to the window, and ``da6idb.hkl.geometry.read_setup`` and
+        ``write_setup`` are how it is read and changed.
+        """
+        geometry = self.geometry_data
+        about = {
+            "image_file": str(geometry.image_path),
+            "master_file": (str(geometry.master_path)
+                            if geometry.master_path else None),
+            "frames": int(geometry.n_frames),
+            "energy_kev": float(geometry.energy_kev),
+            "distance": float(geometry.distance),
+            "angles_from": geometry.sources.get("angles"),
+            "setup_open": bool(self.setup_dialog.isVisible()),
+            "grid_file": str(self.grid_path) if self.grid_path else None,
+            "has_volume": self.grid is not None,
+        }
+        cloud = self.cloud
+        if cloud is not None:
+            bounds = cloud.bounds()
+            about.update(
+                points=int(cloud.points.shape[0]),
+                frames_used=int(cloud.frames_used),
+                bounds=(None if bounds is None else
+                        {name: [float(low), float(high)]
+                         for name, (low, high) in zip(AXIS_NAMES, bounds)}),
+            )
+        return about
+
+    def state(self) -> dict:
+        """Everything the two panels say, as :meth:`set_state` takes it back.
+
+        See :mod:`viewer_state` for what the pair is for. The seven
+        conversion settings at the top come from the setup window and
+        decide the cloud itself; everything after them only says how to
+        draw it. Which scan is open is under ``"about"``, since opening
+        one is :meth:`load`'s job rather than a setting.
+        """
+        placement = self.slice_placement
+        return {
+            **self._conversion_state(),
+            "colormap": self.cmap_combo.currentText(),
+            "background": self.background_combo.currentText(),
+            "show_points": self.show_points_check.isChecked(),
+            "point_size": float(self.point_size_spin.value()),
+            "intensity_min": float(self.int_min_spin.value()),
+            "intensity_max": float(self.int_max_spin.value()),
+            "intensity_auto": self.int_auto_check.isChecked(),
+            "hkl_range": {name: [float(low.value()), float(high.value())]
+                          for name, (low, high) in self.hkl_spins.items()},
+            "hkl_auto": self.hkl_auto_check.isChecked(),
+            "slice_normal": [float(s.value()) for s in self.slice_normal_spins],
+            "slice_point": [float(v) for v in placement.point()],
+            "slice_offset": placement.offset(),
+            "slice_by_point": placement.uses_point(),
+            "slice_width": float(self.slice_width_spin.value()),
+            "show_slice": self.show_slice_check.isChecked(),
+            "slice_lock": self.slice_lock_check.isChecked(),
+            "downsample": self.downsample_check.isChecked(),
+            "max_drawn": int(self.display_points_spin.value()),
+            "cell_scale": float(self.detail_spin.value()),
+            "show_volume": self.show_volume_check.isChecked(),
+            viewer_state.ABOUT: self._about(),
+        }
+
+    def _set_transmission(self, on):
+        check = self.setup_dialog.transmission_check
+        if on and not check.isEnabled():
+            raise ValueError("neither file records a filter transmission, "
+                             "so there is nothing to divide by")
+        check.setChecked(bool(on))
+
+    def _set_hkl_range(self, ranges):
+        """The box as ``{"H": [low, high], ...}``; axes may be left out."""
+        if not isinstance(ranges, dict):
+            raise TypeError('hkl_range is {"H": [low, high], ...}')
+        unknown = set(ranges) - set(self.hkl_spins)
+        if unknown:
+            raise ValueError(f"no axis {', '.join(sorted(unknown))}; "
+                             f"hkl_range takes {', '.join(self.hkl_spins)}")
+        for name, bounds in ranges.items():
+            low, high = viewer_state.pair(bounds, f"hkl_range[{name!r}]")
+            self.hkl_spins[name][0].setValue(low)
+            self.hkl_spins[name][1].setValue(high)
+
+    def _set_slice_normal(self, normal):
+        for spin, value in zip(self.slice_normal_spins,
+                               viewer_state.triple(normal, "slice_normal")):
+            spin.setValue(value)
+
+    def _set_slice_point(self, point):
+        for spin, value in zip(self.slice_placement.point_spins,
+                               viewer_state.triple(point, "slice_point")):
+            spin.setValue(value)
+
+    def _set_show_volume(self, on):
+        if on and self.grid is None:
+            raise ValueError("nothing gridded in this window yet; "
+                             "grid_and_load() makes the volume to show")
+        self.show_volume_check.setChecked(bool(on))
+
+    def set_state(self, state) -> list:
+        """Drive both panels from a dict, converting again only if asked.
+
+        A dict that changes one of the conversion settings runs the
+        conversion again, which takes seconds and re-frames the view;
+        one that only changes how the cloud is drawn costs a redraw.
+        Which is why the two halves go in on either side of that: a
+        reconversion resets the intensity range, the HKL box and where
+        the slice sits, and anything the dict named explicitly should
+        survive it.
+
+        Returns the settings applied, in the order they were.
+        """
+        dialog = self.setup_dialog
+        placement = self.slice_placement
+        conversion = {
+            "first_frame": lambda v: viewer_state.within(
+                dialog.first_spin, v, "first_frame"),
+            "last_frame": lambda v: viewer_state.within(
+                dialog.last_spin, v, "last_frame"),
+            "frame_step": lambda v: viewer_state.within(
+                dialog.step_spin, v, "frame_step"),
+            "threshold": lambda v: dialog.threshold_spin.setValue(float(v)),
+            "max_points": lambda v: viewer_state.within(
+                dialog.max_points_spin, v, "max_points"),
+            "master_angles": dialog.master_angles_check.setChecked,
+            "transmission": self._set_transmission,
+        }
+        display = {
+            "colormap": lambda v: viewer_state.choose(
+                self.cmap_combo, v, "colormap"),
+            "background": lambda v: viewer_state.choose(
+                self.background_combo, v, "background"),
+            "show_points": self.show_points_check.setChecked,
+            "point_size": lambda v: self.point_size_spin.setValue(float(v)),
+            # The limits before the tick: Auto overwrites the boxes with the
+            # cloud's own range, so a dict holding both must mean the tick.
+            "intensity_min": lambda v: self.int_min_spin.setValue(float(v)),
+            "intensity_max": lambda v: self.int_max_spin.setValue(float(v)),
+            "intensity_auto": self.int_auto_check.setChecked,
+            "hkl_range": self._set_hkl_range,
+            "hkl_auto": self.hkl_auto_check.setChecked,
+            "slice_normal": self._set_slice_normal,
+            # Both placements go in and the tick then says which is in force;
+            # the offset is written straight to the box rather than through
+            # set_offset, which would untick the point.
+            "slice_point": self._set_slice_point,
+            "slice_offset": lambda v: placement.offset_spin.setValue(float(v)),
+            "slice_by_point": placement.use_point_check.setChecked,
+            "slice_width": lambda v: self.slice_width_spin.setValue(float(v)),
+            "show_slice": self.show_slice_check.setChecked,
+            "slice_lock": self.slice_lock_check.setChecked,
+            "downsample": self.downsample_check.setChecked,
+            "max_drawn": lambda v: viewer_state.within(
+                self.display_points_spin, v, "max_drawn"),
+            "cell_scale": lambda v: self.detail_spin.setValue(float(v)),
+            "show_volume": self._set_show_volume,
+        }
+        names = (*conversion, *display)
+
+        before = self._conversion_state()
+        done = viewer_state.apply(state, conversion, known=names)
+        if self._conversion_state() != before:
+            self.recompute()
+
+        was, self._updating = self._updating, True
+        try:
+            done += viewer_state.apply(state, display, known=names)
+        finally:
+            self._updating = was
+        self._slice_controls_enabled()
+        self.refresh_view()
+        return done
 
     def _report(self, drawn: int, in_range: int):
         cloud = self.cloud

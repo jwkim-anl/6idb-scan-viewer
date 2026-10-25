@@ -1,0 +1,20 @@
+[
+ "background",
+ "colormap",
+ "full_quality",
+ "hkl_auto",
+ "hkl_range",
+ "intensity_auto",
+ "intensity_max",
+ "intensity_min",
+ "keep_setup",
+ "show_slice",
+ "show_volume",
+ "slice_average",
+ "slice_by_point",
+ "slice_lock",
+ "slice_normal",
+ "slice_offset",
+ "slice_point",
+ "slice_step"
+]

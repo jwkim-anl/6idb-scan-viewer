@@ -1,0 +1,9 @@
+{
+ "cell": 0.0006703176,
+ "footprint_H": 0.0003645253,
+ "footprint_K": 0.0013364335,
+ "footprint_L": 0.0005620182,
+ "frame_gap": 0.0012352973,
+ "in_plane": 0.0004937504,
+ "volume_per_sample": 3e-10
+}

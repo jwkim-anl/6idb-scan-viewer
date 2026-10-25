@@ -1,0 +1,12 @@
+[
+ {
+  "count_time": 2.0,
+  "file": "tise2_2_00152_master.hdf",
+  "image": true,
+  "motors": "psic_eta",
+  "plan": "rel_scan",
+  "points": "101",
+  "range": "psic_eta 20.6917\u219222.6918 (101)",
+  "scan": 152
+ }
+]

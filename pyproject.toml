@@ -31,14 +31,25 @@ hkl = ["xrayutilities>=1.7", "pyvista>=0.45"]
 # The five windows. Not needed to use the package.
 gui = ["pyqt5>=5.15,<6", "pyqtgraph>=0.13", "pyvistaqt>=0.11", "vtk>=9.2",
        "matplotlib>=3.6"]
+# The MCP server, da6idb_mcp: the one new dependency. Its headless tools
+# need [notebook,hkl]; its viewer_* tools start a process that needs
+# [gui], but only if you ask for a window.
+# mcp >=1.10: add_tool() grew the `title` argument there, and that is
+# also where a return annotation started becoming an output schema --
+# which is why tools/__init__.py takes the annotation off the shim.
+# No upper bound: 2.0 renamed FastMCP to MCPServer and moved it, and
+# da6idb_mcp/_sdk.py looks for both names, so 1.x and 2.x both serve.
+# Tested against 2.3.
+mcp = ["mcp>=1.10", "anyio>=4.0"]
 dev = ["pytest>=7"]
-all = ["da6idb[notebook,hkl,gui,dev]"]
+all = ["da6idb[notebook,hkl,gui,mcp,dev]"]
 
 [project.urls]
 Repository = "https://github.com/jwkim-anl/6idb-scan-viewer"
 
 [project.scripts]
 da6idb-grid = "da6idb.hkl.grid:main"
+da6idb-mcp = "da6idb_mcp.server:main"
 
 [project.gui-scripts]
 da6idb-scans = "scan_viewer:main"
@@ -48,11 +59,13 @@ da6idb-vti = "vti_viewer:main"
 da6idb-batch = "batch_grid:main"
 
 [tool.setuptools]
-packages = ["da6idb", "da6idb.hkl"]
+packages = ["da6idb", "da6idb.hkl",
+            "da6idb_mcp", "da6idb_mcp.tools", "da6idb_mcp.viewer"]
 # The windows are single modules beside the package rather than inside it:
 # they are built on da6idb, not part of it.
 py-modules = ["scan_viewer", "image_viewer", "hkl_viewer", "vti_viewer",
-              "slice_plot", "batch_grid", "volume_style", "hkl_grid"]
+              "slice_plot", "batch_grid", "volume_style", "hkl_grid",
+              "viewer_state"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,18 @@
+{
+ "axes": {
+  "x": "H",
+  "y": "K"
+ },
+ "layers": 1,
+ "measured_cells": 1429,
+ "normal": [
+  0.0,
+  0.0,
+  1.0
+ ],
+ "offset": 0.0,
+ "shape": [
+  39,
+  39
+ ]
+}

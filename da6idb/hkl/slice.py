@@ -220,3 +220,41 @@ def sample_plane(grid, normal, origin, pixels=None, layers=1):
     ).reshape(shape)
 
     return image, us, vs, u, v, origin
+
+
+def plane_array(grid, normal=(0, 0, 1), offset=0.0, point=None, layers=1,
+                pixels=None):
+    """A plane through *grid* as a labelled 2D array.
+
+    :func:`sample_plane` with its answer named: an axis-aligned plane is
+    labelled H, K or L outright and carries real reciprocal-space
+    coordinates, so a feature's position can be read straight off it. A
+    tilted one keeps distances along its own two in-plane directions,
+    since no single HKL axis describes them.
+
+    The attributes record both ways of placing the plane -- the *offset*
+    it ended up at and the *point* it passes through -- whichever was
+    given. Unmeasured cells are NaN, as everywhere else.
+    """
+    import xarray as xr
+
+    normal = np.asarray(normal, float)
+    normal = normal / np.linalg.norm(normal)
+    origin, offset = plane_origin(grid.center, normal, offset=offset,
+                                  point=point)
+    image, us, vs, u, v, corner = sample_plane(grid, normal, origin,
+                                               pixels=pixels, layers=layers)
+
+    def axis(direction, samples):
+        index = _axis_index(direction)
+        if index is None:
+            return ("along [%.3f %.3f %.3f]" % tuple(direction), samples)
+        return ("HKL"[index], corner[index] + samples * float(direction[index]))
+
+    x_name, x_values = axis(u, us)
+    y_name, y_values = axis(v, vs)
+    return xr.DataArray(
+        image, dims=(y_name, x_name),
+        coords={y_name: y_values, x_name: x_values}, name="intensity",
+        attrs={"normal": list(normal), "offset": float(offset),
+               "point": [float(c) for c in origin], "layers": int(layers)})

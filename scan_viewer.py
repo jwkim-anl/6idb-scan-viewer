@@ -93,6 +93,8 @@ from matplotlib.figure import Figure
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+import viewer_state
+
 # the one window-to-window import left, and it is about windows
 from image_viewer import ImageViewerWindow
 
@@ -454,7 +456,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             "came from and the scans that were fitted."
         )
         self.trend_export_btn.setEnabled(False)
-        self.trend_export_btn.clicked.connect(self._export_trend)
+        self.trend_export_btn.clicked.connect(lambda: self.export_trend())
         fit_row.addWidget(self.trend_export_btn)
 
         self.separate_y_btn = QtWidgets.QPushButton("Separate Y")
@@ -475,7 +477,7 @@ class HdfViewer(QtWidgets.QMainWindow):
             "curves drawn against one sampling sharing their X column.\n"
             "The header records which scans and settings produced it."
         )
-        self.export_btn.clicked.connect(self._export_curves)
+        self.export_btn.clicked.connect(lambda: self.export_curves())
         axis_row.addWidget(self.export_btn)
 
         self.clip_btn = QtWidgets.QPushButton("Clip map scale")
@@ -750,6 +752,54 @@ class HdfViewer(QtWidgets.QMainWindow):
                 paths.append(Path(item.data(QtCore.Qt.UserRole)))
         return paths
 
+    def _row_of_scan(self, wanted) -> int:
+        """Which row holds *wanted*: a scan number, or a file name."""
+        text = str(wanted).strip()
+        digits = text.isdigit()
+        for row in range(self.file_table.rowCount()):
+            item = self.file_table.item(row, 0)
+            if item is None:
+                continue
+            number = item.text()
+            # "152" and "00152" are the same scan; a name is matched whole.
+            if (number == text
+                    or (digits and number.isdigit() and int(number) == int(text))
+                    or Path(item.data(QtCore.Qt.UserRole)).name == text):
+                return row
+        return -1
+
+    def select_scans(self, scans) -> list[Path]:
+        """Select scans by their numbers rather than by their table rows.
+
+        :meth:`_select_rows` takes positions in the listing, which depend
+        on what else happens to be in the folder; a scan number is what a
+        person, or a logbook, actually names. Numbers may be integers or
+        text, zero-padded or not, and a file name works too.
+
+        Returns the paths now selected. A scan that is not in the listing
+        is an error naming the ones that are, rather than a quietly
+        smaller selection.
+        """
+        if isinstance(scans, (str, int, Path)):
+            scans = [scans]
+        rows, missing = [], []
+        for wanted in scans:
+            row = self._row_of_scan(wanted)
+            (missing if row < 0 else rows).append(wanted if row < 0 else row)
+        if missing:
+            have = ", ".join(
+                self.file_table.item(row, 0).text()
+                for row in range(self.file_table.rowCount())
+                if self.file_table.item(row, 0) is not None
+            )
+            raise ValueError(
+                f"no scan {', '.join(str(m) for m in missing)} in "
+                f"{self._directory}. Scans there: {have or 'none'}"
+            )
+        self.file_table.clearSelection()
+        self._select_rows(rows)
+        return self._selected_paths()
+
     # -- Selection handling -----------------------------------------------
 
     def _on_selection_changed(self):
@@ -855,8 +905,13 @@ class HdfViewer(QtWidgets.QMainWindow):
                 names.append(label.text())
         return names
 
-    def _set_x_field(self, name: str):
-        """Move the X tick to *name* without counting as a hand-made choice."""
+    def _set_x_field(self, name: str, manual: bool = False):
+        """Move the X tick to *name*.
+
+        From inside the window this is the automatic choice following the
+        scan, and must not count as a hand-made one; *manual* is what
+        :meth:`set_state` passes to say that this time it does.
+        """
         self._syncing_fields = True
         try:
             for row in range(self.field_table.rowCount()):
@@ -869,6 +924,9 @@ class HdfViewer(QtWidgets.QMainWindow):
                 )
         finally:
             self._syncing_fields = False
+        if manual:
+            self._manual_x = name
+            self._x_is_auto = not name
 
     def _x_field(self) -> str:
         names = self._checked_in_column(FIELD_X)
@@ -899,6 +957,43 @@ class HdfViewer(QtWidgets.QMainWindow):
         """The normalization field, or ``""`` for none."""
         names = self._checked_in_column(FIELD_NORM)
         return names[0] if names else ""
+
+    def _field_names(self) -> list[str]:
+        """Every field the selected scans have in common, as listed."""
+        return [self.field_table.item(row, 0).text()
+                for row in range(self.field_table.rowCount())
+                if self.field_table.item(row, 0) is not None]
+
+    def set_monitor_field(self, name: str) -> str:
+        """Divide every curve by *name*, or by nothing when it is empty.
+
+        X and Y have had setters all along because the window itself
+        chooses them for a new scan; Norm never had one, since nothing
+        inside the window ever picks it. Replotting follows, as it does
+        when the box is ticked by hand. Returns the field now ticked.
+        """
+        wanted = str(name or "")
+        available = self._field_names()
+        if wanted and wanted not in available:
+            raise ValueError(
+                f"{wanted!r} is not a field of the selected scan(s). "
+                f"Fields: {', '.join(available) or 'none'}"
+            )
+        self._syncing_fields = True
+        try:
+            for row in range(self.field_table.rowCount()):
+                tick = self.field_table.item(row, FIELD_NORM)
+                label = self.field_table.item(row, 0)
+                if tick is None or label is None:
+                    continue
+                tick.setCheckState(
+                    QtCore.Qt.Checked if label.text() == wanted
+                    else QtCore.Qt.Unchecked
+                )
+        finally:
+            self._syncing_fields = False
+        self._update_plot()
+        return self._monitor_field()
 
     def _on_field_item_changed(self, item: QtWidgets.QTableWidgetItem):
         if self._syncing_fields:
@@ -1703,18 +1798,32 @@ class HdfViewer(QtWidgets.QMainWindow):
         self.trend_figure.tight_layout()
         self.trend_canvas.draw_idle()
 
-    def _export_trend(self):
-        """Write the trend's points, with the fit they came from."""
-        if not self._last_trend:
-            QtWidgets.QMessageBox.information(
-                self, "Nothing to export", "The trend plot is empty.")
-            return
-        against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
-        start = str((self._directory or Path(".")) / "trend.csv")
+    def _ask_where(self, title: str, suggested: str):
+        """The save dialog, started in the folder being looked at."""
+        start = str((self._directory or Path(".")) / suggested)
         name, _filter = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export the trend", start, _export.EXPORT_FILTERS)
-        if not name:
-            return
+            self, title, start, _export.EXPORT_FILTERS)
+        return name or None
+
+    def export_trend(self, path=None):
+        """Write the trend's points, with the fit they came from.
+
+        The button passes no *path* and a dialog asks for one; given one,
+        the file goes there and nothing is asked. Returns the files
+        written, or None when the trend is empty or the dialog was
+        dismissed -- the status bar alone cannot say which to anything
+        but a person watching it.
+        """
+        if not self._last_trend:
+            if path is None:
+                QtWidgets.QMessageBox.information(
+                    self, "Nothing to export", "The trend plot is empty.")
+            return None
+        against = self.trend_x_combo.currentText() or _trends.TREND_X_SCAN
+        asked = path is None
+        name = self._ask_where("Export the trend", "trend.csv") if asked else str(path)
+        if name is None:
+            return None
         header = [
             f"trend: {self.trend_y_combo.currentText()} against {against}",
             f"fit: {self.fit_combo.currentText()}, "
@@ -1731,23 +1840,34 @@ class HdfViewer(QtWidgets.QMainWindow):
                 description=header,
             )
         except Exception as exc:
+            # Whoever named the path is not standing at a dialog; give them
+            # the exception rather than a box nobody will click.
+            if not asked:
+                raise
             QtWidgets.QMessageBox.warning(
                 self, "Export failed", f"{type(exc).__name__}: {exc}")
-            return
+            return None
         self.statusBar().showMessage(
             "Wrote " + ", ".join(str(w) for w in written), 8000)
+        return [Path(name).with_name(w) for w in written]
 
-    def _export_curves(self):
-        """Write the plotted curves as columns, with their provenance."""
+    def export_curves(self, path=None):
+        """Write the plotted curves as columns, with their provenance.
+
+        *path* works as it does for :meth:`export_trend`. Returns the
+        files written, or None when there is nothing plotted or the
+        dialog was dismissed.
+        """
         if not self._last_curves:
-            QtWidgets.QMessageBox.information(
-                self, "Nothing to export", "Plot some curves first.")
-            return
-        start = str((self._directory or Path(".")) / "curves.csv")
-        name, _filter = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export the plotted curves", start, _export.EXPORT_FILTERS)
-        if not name:
-            return
+            if path is None:
+                QtWidgets.QMessageBox.information(
+                    self, "Nothing to export", "Plot some curves first.")
+            return None
+        asked = path is None
+        name = (self._ask_where("Export the plotted curves", "curves.csv")
+                if asked else str(path))
+        if name is None:
+            return None
         header = [
             f"scans: {', '.join(p.name for p in self._selected_paths())}",
             f"x: {self._x_field()}",
@@ -1767,11 +1887,14 @@ class HdfViewer(QtWidgets.QMainWindow):
                 description=header,
             )
         except Exception as exc:
+            if not asked:
+                raise
             QtWidgets.QMessageBox.warning(
                 self, "Export failed", f"{type(exc).__name__}: {exc}")
-            return
+            return None
         self.statusBar().showMessage(
             "Wrote " + ", ".join(str(w) for w in written), 8000)
+        return [Path(name).with_name(w) for w in written]
 
     def _average_repeats(self, curves, paths):
         """Collapse each set of repeats into one curve, per Y field.
@@ -1912,6 +2035,162 @@ class HdfViewer(QtWidgets.QMainWindow):
                 self.baseline_table.setItem(row, col, QtWidgets.QTableWidgetItem(text))
         self.baseline_table.setSortingEnabled(True)
         self.baseline_table.resizeColumnsToContents()
+
+    # -- the panel as a dict -----------------------------------------------
+
+    def _scan_numbers(self) -> list[str]:
+        """Every scan in the listing, in the order it is listed."""
+        return [self.file_table.item(row, 0).text()
+                for row in range(self.file_table.rowCount())
+                if self.file_table.item(row, 0) is not None]
+
+    def _about(self) -> dict:
+        """What the window read off the disk, as against what it was told."""
+        paths = self._selected_paths()
+        baseline = getattr(self, "_baseline_window", None)
+        return {
+            "directory": str(self._directory) if self._directory else None,
+            "scans_available": self._scan_numbers(),
+            "files": [str(path) for path in paths],
+            "fields": self._field_names(),
+            "curves": len(self._last_curves),
+            "trend_points": len(self._last_trend),
+            "image_windows": len(self._image_windows),
+            "baseline_open": bool(baseline is not None and baseline.isVisible()),
+        }
+
+    def state(self) -> dict:
+        """Everything the panel says, as a dict :meth:`set_state` takes back.
+
+        See :mod:`viewer_state` for what the pair is for and the rules
+        they keep. Which directory is listed is *not* in here -- it is
+        under ``"about"``, with the scans in it -- because choosing one
+        is the toolbar's job, not a setting. The scans picked out of it
+        are, and they are named by number, so the same dict means the
+        same measurement in a folder that has grown since.
+
+        ``x_auto`` and ``y_auto`` ride along with the fields they
+        govern: a field this window chose for itself follows the next
+        scan to its own motor, and one somebody picked stays put. That
+        difference is invisible in the ticks, so without them the
+        round-trip would quietly turn every automatic choice into a
+        hand-made one.
+        """
+        return {
+            "scans": [scan_number(path) for path in self._selected_paths()],
+            "x_field": self._x_field(),
+            "x_auto": self._x_is_auto,
+            "y_fields": self._checked_y_fields(),
+            "y_auto": self._y_is_auto,
+            "monitor_field": self._monitor_field(),
+            "grid_map": self.grid_btn.isChecked(),
+            "derivative": self.derivative_btn.isChecked(),
+            "separate_y": self.separate_y_btn.isChecked(),
+            "clip_map": self.clip_btn.isChecked(),
+            "average": self.average_combo.currentText(),
+            "fit": self.fit_combo.currentText(),
+            "peaks": int(self.peaks_spin.value()),
+            "fit_parts": self.fit_parts_btn.isChecked(),
+            "trend": self.trend_btn.isChecked(),
+            "trend_x": self.trend_x_combo.currentText(),
+            "trend_y": self.trend_y_combo.currentText(),
+            "baseline_file": self.baseline_combo.currentText(),
+            viewer_state.ABOUT: self._about(),
+        }
+
+    @staticmethod
+    def _pick(combo, value, what):
+        """:func:`viewer_state.choose`, allowing the empty box to read back.
+
+        The trend boxes and the baseline box are filled from whatever is
+        selected, so with nothing selected they are empty and
+        ``state()`` reports ``""`` for them. Putting that back has to
+        mean "still nothing" rather than "no such choice".
+        """
+        text = str(value)
+        if not text and combo.count() == 0:
+            return
+        viewer_state.choose(combo, text, what)
+
+    def _set_x_setting(self, name):
+        wanted = str(name or "")
+        available = self._field_names()
+        if wanted and wanted not in available:
+            raise ValueError(f"{wanted!r} is not a field of the selected "
+                             f"scan(s). Fields: {', '.join(available) or 'none'}")
+        self._set_x_field(wanted, manual=True)
+
+    def _set_x_auto(self, on):
+        self._x_is_auto = bool(on)
+        # The remembered name is what a hand-made choice carries to the next
+        # scan; an automatic X has nothing to carry.
+        self._manual_x = "" if self._x_is_auto else self._x_field()
+
+    def _set_y_setting(self, names):
+        if isinstance(names, str):
+            names = [names]
+        wanted = [str(name) for name in names]
+        available = self._field_names()
+        missing = [name for name in wanted if name not in available]
+        if missing:
+            raise ValueError(f"{', '.join(missing)} not a field of the "
+                             "selected scan(s). Fields: "
+                             f"{', '.join(available) or 'none'}")
+        self._set_y_fields(wanted)
+        self._y_is_auto = not wanted
+
+    def set_state(self, state) -> list:
+        """Drive the panel from a dict, then redraw once.
+
+        The window is held quiet while the settings go in, so a dict
+        that changes a dozen of them costs one redraw rather than
+        twelve. The two trend boxes come after that redraw rather than
+        with the rest: their contents are worked out while drawing --
+        what moved across the selected scans, and how many peaks the
+        fit has -- so before it they would be the previous scan's
+        choices, or empty.
+
+        Returns the settings applied, in the order they were.
+        """
+        first = {
+            # The scans first: they decide which fields exist, which
+            # baseline files are offered, and what the trend can plot.
+            "scans": self.select_scans,
+            "x_field": self._set_x_setting,
+            "x_auto": self._set_x_auto,
+            "y_fields": self._set_y_setting,
+            "y_auto": lambda v: setattr(self, "_y_is_auto", bool(v)),
+            "monitor_field": self.set_monitor_field,
+            "grid_map": self.grid_btn.setChecked,
+            "derivative": self.derivative_btn.setChecked,
+            "separate_y": self.separate_y_btn.setChecked,
+            "clip_map": self.clip_btn.setChecked,
+            "average": lambda v: viewer_state.choose(
+                self.average_combo, v, "average mode"),
+            "fit": lambda v: viewer_state.choose(
+                self.fit_combo, v, "fit shape"),
+            "peaks": lambda v: viewer_state.within(
+                self.peaks_spin, v, "peaks"),
+            "fit_parts": self.fit_parts_btn.setChecked,
+            "trend": self.trend_btn.setChecked,
+            "baseline_file": lambda v: self._pick(
+                self.baseline_combo, v, "baseline file"),
+        }
+        then = {
+            "trend_x": lambda v: self._pick(
+                self.trend_x_combo, v, "trend axis"),
+            "trend_y": lambda v: self._pick(
+                self.trend_y_combo, v, "trend quantity"),
+        }
+        names = (*first, *then)
+
+        was, self._drawing = self._drawing, True
+        try:
+            done = viewer_state.apply(state, first, known=names)
+        finally:
+            self._drawing = was
+        self._update_plot()
+        return done + viewer_state.apply(state, then, known=names)
 
 
 def main():

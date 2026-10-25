@@ -137,14 +137,14 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
         self.export_image_button.setToolTip(
             "Save the slice as a 2D array with its H/K/L axes."
         )
-        self.export_image_button.clicked.connect(self.export_image)
+        self.export_image_button.clicked.connect(lambda: self.export_image())
         controls.addWidget(self.export_image_button)
         self.export_cut_button = QtWidgets.QPushButton("Export cut…")
         self.export_cut_button.setToolTip(
             "Save the cut as columns: position, H, K, L and intensity for every\n"
             "point along it."
         )
-        self.export_cut_button.clicked.connect(self.export_cut)
+        self.export_cut_button.clicked.connect(lambda: self.export_cut())
         controls.addWidget(self.export_cut_button)
         layout.addLayout(controls)
 
@@ -736,13 +736,32 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
             path = path.with_suffix(suffix)
         return path, suffix
 
-    def export_image(self):
-        """Save the slice as a 2D array with its axes."""
-        if self._data is None:
-            return
-        path, suffix = self._ask("Export the slice", "_slice.txt")
+    def _destination(self, path, title, suggested):
+        """Where to write: what was asked for, or what a dialog says.
+
+        Returns ``(path, suffix, asked)``, or ``(None, None, True)`` when
+        the dialog was dismissed.
+        """
         if path is None:
-            return
+            path, suffix = self._ask(title, suggested)
+            return path, suffix, True
+        path = Path(path)
+        return path, export.suffix_for(path), False
+
+    def export_image(self, path=None):
+        """Save the slice as a 2D array with its axes.
+
+        The button passes no *path* and a dialog asks for one. Given one,
+        nothing is asked and the file goes there, its extension choosing
+        the format. Returns the path written, or None when there is no
+        slice or the dialog was dismissed.
+        """
+        if self._data is None:
+            return None
+        path, suffix, asked = self._destination(path, "Export the slice",
+                                                "_slice.txt")
+        if path is None:
+            return None
         data = self._data
         image = np.ma.filled(data["image"], np.nan)
         x, y = data["x"], data["y"]
@@ -751,35 +770,49 @@ class SlicePlotWindow(QtWidgets.QMainWindow):
                                 x_label=data["x_label"], y_label=data["y_label"],
                                 description=self._provenance())
         except Exception as exc:
+            # Whoever named the path is not a person standing at a dialog:
+            # give them the exception rather than a box nobody will click.
+            if not asked:
+                raise
             QtWidgets.QMessageBox.warning(
                 self, "Could not write", f"{path.name}\n\n{type(exc).__name__}: {exc}"
             )
-            return
+            return None
         self.status.showMessage(
             f"wrote {path.name} — {image.shape[1]}×{image.shape[0]} array plus axes"
         )
+        return path
 
-    def export_cut(self):
-        """Save the cut as columns, H, K, L and intensity for every point."""
+    def export_cut(self, path=None):
+        """Save the cut as columns, H, K, L and intensity for every point.
+
+        *path* works as it does for :meth:`export_image`. Returns every
+        file written -- text and CSV take one per cut, so "along the axes"
+        writes two -- or None when there is no cut to write.
+        """
         if self._data is None:
-            return
+            return None
         sets = self._cut_datasets()
         if not sets:
-            return
-        path, suffix = self._ask("Export the cut", "_cut.txt")
+            return None
+        path, suffix, asked = self._destination(path, "Export the cut",
+                                                "_cut.txt")
         if path is None:
-            return
+            return None
         try:
             written = self._write_columns(path, suffix, sets)
         except Exception as exc:
+            if not asked:
+                raise
             QtWidgets.QMessageBox.warning(
                 self, "Could not write", f"{path.name}\n\n{type(exc).__name__}: {exc}"
             )
-            return
+            return None
         points = sum(len(next(iter(columns.values()))) for _n, _note, columns in sets)
         self.status.showMessage(
             f"wrote {', '.join(written)} — {points:,} points"
         )
+        return [path.with_name(name) for name in written]
 
     def _write_columns(self, path, suffix, sets):
         """One file of columns per cut for text, one file holding all otherwise."""

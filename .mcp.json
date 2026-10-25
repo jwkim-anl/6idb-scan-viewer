@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "da6idb": {
+      "command": "${DA6IDB_PYTHON:-/Users/jwkim/miniconda3/envs/DashPVA/bin/python}",
+      "args": ["-m", "da6idb_mcp", "--folder", "${DA6IDB_DATA:-data}"],
+      "env": {
+        "PYTHONPATH": ".",
+        "MPLBACKEND": "agg"
+      }
+    }
+  }
+}

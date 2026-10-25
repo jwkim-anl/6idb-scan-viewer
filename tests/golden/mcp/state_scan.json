@@ -1,0 +1,20 @@
+[
+ "average",
+ "baseline_file",
+ "clip_map",
+ "derivative",
+ "fit",
+ "fit_parts",
+ "grid_map",
+ "monitor_field",
+ "peaks",
+ "scans",
+ "separate_y",
+ "trend",
+ "trend_x",
+ "trend_y",
+ "x_auto",
+ "x_field",
+ "y_auto",
+ "y_fields"
+]

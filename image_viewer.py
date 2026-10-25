@@ -82,6 +82,8 @@ from PyQt5 import QtCore
 from PyQt5 import QtGui
 from PyQt5 import QtWidgets
 
+import viewer_state
+
 
 
 
@@ -2185,6 +2187,15 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
     def _on_background_geometry_changed(self, _roi):
         self.backgroundChanged.emit()
 
+    def rois(self) -> list[SharedRoi]:
+        """Every ROI on the image, in the order the table lists them.
+
+        A copy of the list rather than the list itself: appending to it
+        would leave the table, the plots and the stored specs behind.
+        :meth:`add_roi` and :meth:`delete_roi` are how it changes.
+        """
+        return list(self._rois)
+
     def selected_roi(self) -> SharedRoi | None:
         row = self.roi_table.currentRow()
         if 0 <= row < len(self._rois):
@@ -2400,6 +2411,165 @@ class ImageViewerWindow(QtWidgets.QMainWindow):
 
     def _forget_hkl_window(self, window):
         self._hkl_windows = [w for w in self._hkl_windows if w is not window]
+
+    # -- the panel as a dict -----------------------------------------------
+
+    def _roi_state(self, roi: SharedRoi) -> dict:
+        pos, size = roi.pos(), roi.size()
+        return {
+            "name": roi.name,
+            "x": float(pos.x()),
+            "y": float(pos.y()),
+            "w": float(size.x()),
+            "h": float(size.y()),
+            "angle": float(roi.angle()),
+            "locked": bool(roi.locked),
+            "visible": bool(roi.visible),
+        }
+
+    def _about(self) -> dict:
+        """What the window was given, as against what it was told to show."""
+        background = self._background_roi
+        return {
+            "files": [str(d.path) for d in self.datasets],
+            "masters": [str(d.master_path) if d.master_path else None
+                        for d in self.datasets],
+            "frames": int(self.max_frames()),
+            "frame_shape": list(self.frame_shape()),
+            "metrics": self.metric_keys(),
+            "frame_range": list(self._frame_data_range()),
+            "playing": bool(self.play_timer.isActive()),
+            "background_roi": background.name if background else None,
+            "open_plots": [
+                {"roi": dock.roi.name,
+                 "kind": "2d" if isinstance(dock, Roi2DPlotDock) else "curve"}
+                for dock in self._roi_docks
+            ],
+            "hkl_windows": len(self._hkl_windows),
+        }
+
+    def state(self) -> dict:
+        """Everything the panel says, as a dict :meth:`set_state` takes back.
+
+        See :mod:`viewer_state` for what the pair is for and the rules
+        they keep. Which files are open is *not* in here -- it is under
+        ``"about"``, with the frame count and the detector's size --
+        because this window takes its files in the constructor.
+
+        The ROIs are, though. They are as much a setting as the
+        colormap is: a rectangle drawn on one scan is the first thing
+        anyone wants on the next one, and a list of them is how it
+        travels.
+        """
+        return {
+            "transpose": self.transpose_check.isChecked(),
+            "log": self.log_check.isChecked(),
+            "aspect": self.aspect_check.isChecked(),
+            "colormap": combo_key(self.cmap_combo, "viridis"),
+            "frame": int(self._frame_index),
+            "level_min": float(self.vmin_spin.value()),
+            "level_max": float(self.vmax_spin.value()),
+            "auto_levels": self.auto_levels_check.isChecked(),
+            "fps": int(self.fps_spin.value()),
+            "replay": self.replay_check.isChecked(),
+            "rois": [self._roi_state(roi) for roi in self._rois],
+            "background": (self._background_roi.name
+                           if self._background_roi is not None else None),
+            viewer_state.ABOUT: self._about(),
+        }
+
+    def _set_rois(self, specs):
+        """Make the ROI list match *specs*, matching the ones there by name.
+
+        A rectangle whose name is already on the image is moved rather
+        than duplicated, one the list does not mention is deleted, and
+        the rest are drawn. Names are the identity here because that is
+        what the ROI plots, the background and the table all show; the
+        table keeps them in the order they were added, so a list that
+        only reorders them changes nothing.
+        """
+        if not isinstance(specs, (list, tuple)):
+            raise TypeError('rois is a list of {"name": ..., "x": ..., ...}')
+        wanted = []
+        for index, spec in enumerate(specs):
+            if not isinstance(spec, dict):
+                raise TypeError(f"rois[{index}] is a dict, not "
+                                f"{type(spec).__name__}")
+            missing = [key for key in ("name", "x", "y", "w", "h")
+                       if key not in spec]
+            if missing:
+                raise ValueError(f"rois[{index}] has no "
+                                 f"{', '.join(missing)}; an ROI takes "
+                                 "name, x, y, w, h and may take "
+                                 "angle, locked, visible")
+            unknown = set(spec) - {"name", "x", "y", "w", "h",
+                                   "angle", "locked", "visible"}
+            if unknown:
+                raise ValueError(f"rois[{index}] has no such key: "
+                                 f"{', '.join(sorted(unknown))}")
+            wanted.append(spec)
+        names = [str(spec["name"]) for spec in wanted]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise ValueError("two ROIs cannot share a name: "
+                             f"{', '.join(repeated)}")
+
+        for roi in [roi for roi in self._rois if roi.name not in names]:
+            self.delete_roi(roi)
+        existing = {roi.name: roi for roi in self._rois}
+        for spec, name in zip(wanted, names):
+            geometry = (float(spec["x"]), float(spec["y"]),
+                        float(spec["w"]), float(spec["h"]),
+                        float(spec.get("angle", 0.0)))
+            roi = existing.get(name)
+            if roi is None:
+                roi = self.add_roi(pos=geometry[:2], size=geometry[2:4],
+                                   angle=geometry[4], name=name, select=False)
+            else:
+                roi.set_geometry(*geometry)
+            self.set_roi_visible(roi, bool(spec.get("visible", True)))
+            self.set_roi_locked(roi, bool(spec.get("locked", False)))
+
+    def _set_background(self, name):
+        if name is None:
+            self.set_background_roi(None)
+            return
+        for roi in self._rois:
+            if roi.name == str(name):
+                self.set_background_roi(roi)
+                return
+        drawn = ", ".join(roi.name for roi in self._rois) or "none"
+        raise ValueError(f"no ROI called {str(name)!r} to subtract as the "
+                         f"background. ROIs: {drawn}")
+
+    def set_state(self, state) -> list:
+        """Drive the panel from a dict. Returns the settings applied.
+
+        The order is the one the window needs rather than the one the
+        dict happens to be in: Transpose swaps every ROI's axes, so it
+        goes before the rectangles are placed; Log scale rescales the
+        colour limits, so it goes before they are typed; and the limits
+        go before the Auto tick that would overwrite them.
+        """
+        setters = {
+            "transpose": self.transpose_check.setChecked,
+            "log": self.log_check.setChecked,
+            "aspect": self.aspect_check.setChecked,
+            "colormap": lambda v: viewer_state.choose(
+                self.cmap_combo, v, "colormap"),
+            "frame": lambda v: viewer_state.within(
+                self.frame_spin, v, "frame"),
+            # Typing a limit switches Auto levels off, so a dict holding
+            # both must mean the tick: it is applied last and wins.
+            "level_min": lambda v: self.vmin_spin.setValue(float(v)),
+            "level_max": lambda v: self.vmax_spin.setValue(float(v)),
+            "auto_levels": self.auto_levels_check.setChecked,
+            "fps": lambda v: viewer_state.within(self.fps_spin, v, "fps"),
+            "replay": self.replay_check.setChecked,
+            "rois": self._set_rois,
+            "background": self._set_background,
+        }
+        return viewer_state.apply(state, setters)
 
     # -- teardown ---------------------------------------------------------
 

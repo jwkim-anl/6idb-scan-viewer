@@ -1,0 +1,13 @@
+[
+ "energy_kev",
+ "distance",
+ "center_pixel",
+ "detector_size",
+ "pixel_direction",
+ "ub",
+ "sample_dirs",
+ "detector_dirs",
+ "primary_beam",
+ "inplane",
+ "surface"
+]

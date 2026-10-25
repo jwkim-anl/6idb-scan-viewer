@@ -116,6 +116,7 @@ pip install -e .                 # reading and reducing: numpy, h5py, scipy
 pip install -e ".[notebook]"     # + pandas and xarray, for da6idb.session
 pip install -e ".[hkl]"          # + xrayutilities and pyvista, for reciprocal space
 pip install -e ".[gui]"          # + the windows
+pip install -e ".[mcp]"          # + the MCP server, below
 pip install -e ".[all]"
 ```
 
@@ -129,10 +130,43 @@ if that is easier.
 pytest tests          # or: python tests/run.py, which needs no pytest
 ```
 
-53 of them, pinning values rather than asking whether a call raises — a function
+150 of them, pinning values rather than asking whether a call raises — a function
 that moves has to come back with the same numbers. One starts a subprocess with
 PyQt5, pyqtgraph and pyvistaqt made unimportable and loads the package anyway, so
 "no Qt" is tested rather than claimed.
+
+---
+
+## `da6idb_mcp` — the same thing from a conversation
+
+The five windows, and the package under them, as 52 tools an LLM can call. Ask
+for scan 152's rocking curve and the peak statistics come back with the plot;
+ask for an L-slice of a gridded map and the image comes back; ask it to open the
+real `image_viewer` on scan 152 and the window appears on your screen, still
+steerable from the chat while you watch it.
+
+```bash
+pip install -e ".[notebook,hkl,mcp]"           # headless tools
+pip install -e ".[all]"                        # + the real windows
+python -m da6idb_mcp --list                    # the tool names; needs no mcp
+python -m da6idb_mcp --folder data             # the server itself, on stdio
+```
+
+`mcp` is the one new dependency. `.mcp.json` at the root registers it for Claude
+Code; set `DA6IDB_PYTHON` to the interpreter that has the package if it is not
+the one on your path.
+
+Two layers. The headless tools — `scan_*`, `image_*`, `hkl_*`, `vti_*`,
+`batch_*` — compute through `da6idb` and draw with Agg, so they need no window
+and no desktop session. The `viewer_*` tools drive the actual Qt windows from a
+separate process, because a VTK fault is a segfault rather than an exception and
+must not be able to take the rest down with it; on a machine with no display
+they say so in one sentence and nothing else is affected. `da6idb_eval` runs a
+snippet against the very objects the other tools built, for the question nobody
+wrote a tool for.
+
+**[`docs/mcp.md`](docs/mcp.md)** has the tool list, the flags, and why it is
+built in two processes.
 
 ---
 

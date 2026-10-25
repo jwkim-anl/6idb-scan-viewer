@@ -1,0 +1,14 @@
+[
+ "aspect",
+ "auto_levels",
+ "background",
+ "colormap",
+ "fps",
+ "frame",
+ "level_max",
+ "level_min",
+ "log",
+ "replay",
+ "rois",
+ "transpose"
+]

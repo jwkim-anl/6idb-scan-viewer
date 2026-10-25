@@ -591,6 +591,11 @@ class HklMap:
         # about the same lattice, and the first slice after a grid always
         # read the file again.
         fresh = settings.pop("reuse", True) is False
+        # Same for a progress callback: it says who is watching, not which
+        # lattice is wanted. Left in the key it would never match twice --
+        # a function's repr carries its address -- so every slice after a
+        # gridding run would read the file again.
+        watcher = settings.pop("progress", None)
         key = repr(sorted((k, repr(v)) for k, v in settings.items()))
         if not fresh and self._cube_cache is not None:
             seen, path, stamp, cube = self._cube_cache
@@ -598,7 +603,7 @@ class HklMap:
                 return cube, path
         cube, path, _made = _grid.ensure_grid(
             self.path, self.master, geometry=self.geometry,
-            reuse=not fresh, **settings)
+            reuse=not fresh, progress=watcher, **settings)
         self._cube_cache = (key, Path(path), self._stamp(path), cube)
         return cube, Path(path)
 
@@ -638,9 +643,14 @@ class HklMap:
         The same ``.vti`` the viewers cache, so a grid made here opens there
         and the other way round.
         """
-        self._lattice = dict(hkl_range=hkl_range, oversample=oversample,
-                             output=output, **kwargs)
-        cube, path = self._cube({**self._lattice, "reuse": reuse})
+        # Remembered so slice() and cut() reach the same lattice -- all of
+        # it except who was watching this particular run, which must not
+        # outlive it and be called again from a later slice.
+        self._lattice = dict(
+            hkl_range=hkl_range, oversample=oversample, output=output,
+            **{k: v for k, v in kwargs.items() if k != "progress"})
+        cube, path = self._cube({**self._lattice, "reuse": reuse,
+                                 "progress": kwargs.get("progress")})
         array = _grid.to_xarray(cube)
         array.attrs["path"] = str(path)
         return array
@@ -663,30 +673,9 @@ class HklMap:
         asking for a coarse grid and then slicing it does not quietly produce
         a second one at full resolution.
         """
-        import xarray as xr
-
         cube, _path = self._cube({**self._lattice, **kwargs})
-        normal = np.asarray(normal, dtype=float)
-        normal = normal / np.linalg.norm(normal)
-        origin, offset = _slice.plane_origin(
-            cube.center, normal, offset=offset, point=point)
-        image, us, vs, u, v, corner = _slice.sample_plane(
-            cube, normal, origin, layers=layers)
-
-        def axis(direction, samples):
-            index = _slice._axis_index(direction)
-            if index is None:
-                return ("along [%.3f %.3f %.3f]" % tuple(direction), samples)
-            return ("HKL"[index], corner[index] + samples * float(direction[index]))
-
-        x_name, x_values = axis(u, us)
-        y_name, y_values = axis(v, vs)
-        return xr.DataArray(image, dims=(y_name, x_name),
-                            coords={y_name: y_values, x_name: x_values},
-                            name="intensity",
-                            attrs={"normal": list(normal), "offset": float(offset),
-                                   "point": [float(c) for c in origin],
-                                   "layers": int(layers)})
+        return _slice.plane_array(cube, normal=normal, offset=offset,
+                                  point=point, layers=layers)
 
     def cut(self, start, end, samples=None, width=1, normal=None,
             **kwargs) -> pd.DataFrame:

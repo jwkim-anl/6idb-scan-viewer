@@ -1,0 +1,9 @@
+[
+ "viewer_call",
+ "viewer_close",
+ "viewer_list",
+ "viewer_open",
+ "viewer_screenshot",
+ "viewer_set_state",
+ "viewer_state"
+]

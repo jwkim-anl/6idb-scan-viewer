@@ -1,0 +1,16 @@
+{
+ "cells": 54872,
+ "dimensions": [
+  38,
+  38,
+  38
+ ],
+ "dims": [
+  "H",
+  "K",
+  "L"
+ ],
+ "filled_fraction": 0.9505,
+ "max": 5185.060546875,
+ "measured_cells": 52157
+}
